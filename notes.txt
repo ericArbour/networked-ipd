@@ -1,0 +1,91 @@
+Prisoner's Dilemma Rules:
+
+The prisoner’s dilemma is a game for two players where each player has two possible moves:
+  1. cooperate.
+  2. defect.
+
+Each player makes their move without the other player’s knowledge.
+
+The possible scores are a, b, and c, with a > b > 0 > c. 
+A player scores a if they defect and the other cooperates. 
+A player scores b if they cooperate and the other cooperates. 
+A player scores c if the other defects. 
+
+
+Iterated Prisoner's Dilemma:
+
+A referee server allows for clients to connect to it and randomly play other clients in games of the prisoner's dilemma.
+
+Once there are two or more clients, gameplay proceeds until there is less than two clients or the server is shut down.
+
+Clients can disconnect at any time by having their process shut down.
+
+Clients will no longer be assigned new games if their score falls below 0 (or another configurable number).
+
+Clients will no longer be assigned new games if they take too long to respond (a configurable amount of time).
+
+
+Server Requirements:
+
+Server configuration will be set by a Configurator configuration file.
+
+On startup, the server starts up zero or more clients to connect to itself, 
+including a static configured list of clients with specified strategies, 
+and a configured number of clients with randomly selected strategies. 
+
+After server startup, you can use the command line to run and connect additional clients, 
+specifying to them their strategy and the server host and port as command line arguments.
+
+The server continuously prints to the console a history of gameplay, and after each game,
+it prints a scoreboard showing the net scores of all connected clients, 
+along with their strategies.
+
+The server serves to all clients an event stream using websockets.
+The stream includes:
+  1. When a new client joins.
+  2. When a game is started and between whom.
+  3. Each move made by each client.
+
+When a new client connects to the server's event stream websocket:
+  1. The client announces their strategy to the server.
+  2. The server sends the client an id number.
+  3. The server sends the client, in order, a complete history of all events so far in the game.
+
+Technical notes:
+
+Create a function which returns (in a monad) a (Streamly) Stream of events from the event stream websocket.
+
+Create a function which runs an HTTP server to listen to the move POSTs and returns a Stream of moves. 
+You do not need to authenticate the clients for move POSTs; the server can assume that the clients are honest about their identities and do not pretend to be clients they are not.
+
+To implement the event stream of client moves:
+  1. Spawn a thread which runs an HTTP server which listens for POSTs from clients.
+  2. Put the POST payloads into an MVar.
+  3. Create an event stream by forever pulling that MVar.
+
+HTTP Server library: https://github.com/haskell-servant/servanthttps://github.com/haskell-servant/servant
+Note, using servant may handle JSON deserialization and make Aeson unnecessary
+
+
+Client Requirements:
+
+Behavior set via command line arguments. 
+
+On startup, a client is provided the server host, port, and their specific gameplay strategy via the command line.
+
+When the client connects to the server, it must announce its strategy to the server.
+The server will respond with an id number for the client, that the client uses to determine when it is time to POST a move to the server.
+
+The client must listen to the event stream from the server mentioned above.
+
+To implement the event stream websocket listener for the client, spawn a thread which opens up the event stream websocket and repeatedly listens for events and puts them to an MVar. Then create an event stream by forever pulling that MVar.
+
+Create a function which accepts a stream of moves and POSTs them to the server in a separate thread by doing the following:
+  1. Create an MVar.
+  2. Put to the MVar from a thread which is repeatedly running an atomic TVar computation of the event history.
+  3. The TVar is the complete event history in a format of my choosing and should be continuously updated from the event stream in a separate thread.
+  4. Read the event history and ask, do I need to move right now (i.e. has the server started a game involving me where I haven’t yet moved)?
+    a. If you do need to move, compute your move according to your strategy as a function of event history, and return that from the atomic computation, and put the result of the atomic computation into the MVar.
+    b. If you don’t need to move right now, then GHC.Conc.retry (That will bring you back to the start of the atomic computation, where you’ll read the event history TVar again, but by the semantics of atomic computations, you won’t move on to the next step until the value of the event history TVar changes).
+
+Create a function for each strategy that takes an event history and returns a move.
