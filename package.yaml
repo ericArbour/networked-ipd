@@ -21,6 +21,24 @@ description:         Please see the README on GitHub at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
+- servant-server
+- servant
+- base-compat
+- mtl
+- aeson
+- lucid
+- network
+- text
+- blaze-html
+- blaze-markup
+- wai
+- warp
+- http-media
+- attoparsec
+- bytestring
+- string-conversions
+- time
+- directory
 
 library:
   source-dirs: src
