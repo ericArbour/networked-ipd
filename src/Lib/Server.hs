@@ -16,6 +16,7 @@ import Prelude.Compat
 import Control.Monad.Except
 import Control.Monad.Reader
 import Data.Aeson
+import qualified Data.Aeson.Parser
 import Data.Aeson.Types
 import Data.Attoparsec.ByteString
 import Data.ByteString (ByteString)
@@ -29,41 +30,47 @@ import Network.HTTP.Media ((//), (/:))
 import Network.Wai
 import Network.Wai.Handler.Warp
 import Servant
+import Servant.Types.SourceT (source)
 import System.Directory
 import Text.Blaze
-import Text.Blaze.Html.Renderer.Utf8
-import Servant.Types.SourceT (source)
-import qualified Data.Aeson.Parser
 import qualified Text.Blaze.Html
+import Text.Blaze.Html.Renderer.Utf8
 
-type UserAPI1 = "users" :> Get '[JSON] [User]
+type API = "move" :> ReqBody '[ JSON] MoveInfo :> Post '[ JSON] MoveInfo
 
-data User = User
-  { name :: String
-  , age :: Int
-  , email :: String
-  , registration_date :: Day
-  } deriving (Eq, Show, Generic)
+data Move
+  = Cooperate
+  | Defect
+  deriving (Eq, Show, Generic)
 
-instance ToJSON User
+instance ToJSON Move
 
-users1 :: [User]
-users1 =
-  [ User "Isaac Newton 2"    372 "isaac@newton.co.uk" (fromGregorian 1683  3 1)
-  , User "Albert Einstein" 136 "ae@mc2.org"         (fromGregorian 1905 12 1)
-  ]
+instance FromJSON Move
 
-server1 :: Server UserAPI1
-server1 = return users1
+data MoveInfo =
+  MoveInfo
+    { userId :: Int
+    , move :: Move
+    }
+  deriving (Eq, Show, Generic)
 
-userAPI :: Proxy UserAPI1
-userAPI = Proxy
+instance ToJSON MoveInfo
 
--- 'serve' comes from servant and hands you a WAI Application,
--- which you can think of as an "abstract" web application,
--- not yet a webserver.
-app1 :: Application
-app1 = serve userAPI server1
+instance FromJSON MoveInfo
+
+server :: Server API
+server = postMove
+  where
+    postMove :: MoveInfo -> Handler MoveInfo
+    postMove moveInfo = do
+      liftIO $ print moveInfo
+      return moveInfo
+
+api :: Proxy API
+api = Proxy
+
+app :: Application
+app = serve api server
 
 main :: IO ()
-main = run 8081 app1
+main = run 8081 app
