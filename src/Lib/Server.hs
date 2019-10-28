@@ -75,10 +75,14 @@ api = Proxy
 app :: MVar MoveInfo -> Application
 app moveMVar = serve api (server moveMVar)
 
+getMoveStream :: SerialT IO MoveInfo
+getMoveStream = do
+  moveMVar <- liftIO newEmptyMVar
+  liftIO $ forkIO $ run 8081 (app moveMVar)
+  S.repeatM $ liftIO $ takeMVar moveMVar
+
 main :: IO ()
 main = do
-  moveMVar <- newEmptyMVar
-  forkIO $ run 8081 (app moveMVar)
-  runStream $ S.mapM (print) $ S.repeatM $ takeMVar moveMVar
+  runStream $ S.mapM (print) $ getMoveStream
   _ <- getLine
   return ()
