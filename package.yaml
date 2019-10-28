@@ -39,6 +39,7 @@ dependencies:
 - string-conversions
 - time
 - directory
+- streamly
 
 library:
   source-dirs: src

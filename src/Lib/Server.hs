@@ -13,6 +13,7 @@ module Lib.Server where
 import Prelude ()
 import Prelude.Compat
 
+import Control.Concurrent
 import Control.Monad.Except
 import Control.Monad.Reader
 import Data.Aeson
@@ -31,12 +32,14 @@ import Network.Wai
 import Network.Wai.Handler.Warp
 import Servant
 import Servant.Types.SourceT (source)
+import Streamly
+import qualified Streamly.Prelude as S
 import System.Directory
 import Text.Blaze
 import qualified Text.Blaze.Html
 import Text.Blaze.Html.Renderer.Utf8
 
-type API = "move" :> ReqBody '[ JSON] MoveInfo :> Post '[ JSON] MoveInfo
+type API = "move" :> ReqBody '[JSON] MoveInfo :> Post '[JSON] MoveInfo
 
 data Move
   = Cooperate
@@ -58,19 +61,24 @@ instance ToJSON MoveInfo
 
 instance FromJSON MoveInfo
 
-server :: Server API
-server = postMove
+server :: MVar MoveInfo -> Server API
+server moveMVar = postMove
   where
     postMove :: MoveInfo -> Handler MoveInfo
     postMove moveInfo = do
-      liftIO $ print moveInfo
+      liftIO $ putMVar moveMVar moveInfo
       return moveInfo
 
 api :: Proxy API
 api = Proxy
 
-app :: Application
-app = serve api server
+app :: MVar MoveInfo -> Application
+app moveMVar = serve api (server moveMVar)
 
 main :: IO ()
-main = run 8081 app
+main = do
+  moveMVar <- newEmptyMVar
+  forkIO $ run 8081 (app moveMVar)
+  runStream $ S.mapM (print) $ S.repeatM $ takeMVar moveMVar
+  _ <- getLine
+  return ()
