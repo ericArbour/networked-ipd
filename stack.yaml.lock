@@ -3,7 +3,14 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/lock_files
 
-packages: []
+packages:
+- completed:
+    hackage: websockets-0.12.6.1@sha256:3816e841d8102877817d24ef5c96288e79f1323434268b866aa40732cc86763f,7649
+    pantry-tree:
+      size: 2592
+      sha256: 39a2bb7273c794e77bbc29cd1a0fa9ed15066bd27818cac88f3ab6d5d1d3220e
+  original:
+    hackage: websockets-0.12.6.1
 snapshots:
 - completed:
     size: 524786
