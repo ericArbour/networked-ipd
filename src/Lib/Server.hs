@@ -155,8 +155,8 @@ talk (user, conn) state =
 
 main :: IO ()
 main = do
-  runStream $ S.mapM (print) $ getMoveStream
   state <- newMVar newServerState
-  WS.runServer "127.0.0.1" 8082 $ application state
+  forkIO $ WS.runServer "127.0.0.1" 8082 $ application state
+  runStream $ S.mapM (print) $ getMoveStream
   _ <- getLine
   return ()
