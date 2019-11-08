@@ -13,7 +13,7 @@ import qualified Data.Text.IO        as T
 import qualified Network.WebSockets  as WS
 import Data.Proxy
 import Servant.Client
-import Network.HTTP.Client (newManager, defaultManagerSettings)
+import Network.HTTP.Client (newManager, defaultManagerSettings, Manager)
 
 import Lib.Shared
 
@@ -22,8 +22,15 @@ import Lib.Shared
 api :: Proxy API
 api = Proxy
 
-postMove manager' = hoistClient api (fmap (either (error . show) id) . flip runClientM (mkClientEnv manager' baseurl)) (client api)
+getPostMove :: Manager -> Client IO API
+getPostMove manager' = hoistClient api (handleError . getIOClient) (client api)
   where baseurl = BaseUrl Http "localhost" 8081 ""
+        clientEnv :: ClientEnv
+        clientEnv = mkClientEnv manager' baseurl
+        getIOClient :: ClientM a -> IO (Either ClientError a)
+        getIOClient = flip runClientM clientEnv
+        handleError :: IO (Either ClientError a) -> IO a
+        handleError = fmap (either (error . show) id)
 
 -- Websockets
 --------------------------------------------------------------------------------
@@ -49,6 +56,7 @@ app conn = do
 main2 :: IO ()
 main2 = do
   manager' <- newManager defaultManagerSettings
-  res <- postMove manager' $ MoveInfo { userId = 1, move = Defect }
+  let postMove = getPostMove manager'
+  res <- postMove $ MoveInfo { userId = 1, move = Defect }
   print res
   withSocketsDo $ WS.runClient "127.0.0.1" 8082 "/" app
