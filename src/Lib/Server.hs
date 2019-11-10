@@ -9,8 +9,6 @@
 
 module Lib.Server where
 
-import Prelude ()
-import Prelude.Compat
 import Control.Concurrent
 import Control.Exception (finally)
 import Control.Monad.Except
@@ -30,6 +28,8 @@ import Network.HTTP.Media ((//), (/:))
 import Network.Wai
 import Network.Wai.Handler.Warp
 import qualified Network.WebSockets as WS
+import Prelude ()
+import Prelude.Compat
 import Servant
 import Servant.Types.SourceT (source)
 import Streamly
@@ -63,74 +63,82 @@ getMoveStream = do
   S.repeatM $ liftIO $ takeMVar moveMVar
 
 -- WebSockets
-type Client = (T.Text, WS.Connection)
+data Client =
+  Client
+    { uid :: Int
+    , name :: T.Text
+    , wsConn :: WS.Connection
+    }
 
-type ServerState = [Client]
+data ServerState =
+  ServerState
+    { clients :: [Client]
+    , uidCounter :: Int
+    }
 
-newServerState :: [Client]
-newServerState = []
+initialServerState :: ServerState
+initialServerState = ServerState {clients = [], uidCounter = 1}
 
-numClients :: ServerState -> Int
+numClients :: [Client] -> Int
 numClients = length
 
-clientExists :: Client -> ServerState -> Bool
-clientExists client = any ((== fst client) . fst)
-
-addClient :: Client -> ServerState -> ServerState
+addClient :: Client -> [Client] -> [Client]
 addClient client clients = client : clients
 
-removeClient :: Client -> ServerState -> ServerState
-removeClient client = filter ((/= fst client) . fst)
+removeClient :: Client -> [Client] -> [Client]
+removeClient client = filter ((/= uid client) . uid)
 
-broadcast :: T.Text -> ServerState -> IO ()
+broadcast :: T.Text -> [Client] -> IO ()
 broadcast message clients = do
   T.putStrLn message
-  forM_ clients $ \(_, conn) -> WS.sendTextData conn message
+  forM_ clients $ \client -> WS.sendTextData (wsConn client) message
 
-application state pending = do
+application :: MVar ServerState -> WS.PendingConnection -> IO ()
+application serverStateMVar pending = do
   conn <- WS.acceptRequest pending
   WS.withPingThread conn 30 (return ()) $ do
     msg <- WS.receiveData conn
-    clients <- readMVar state
+    serverState <- readMVar serverStateMVar
+    let currentUid = uidCounter serverState
+        newClient = Client {uid = currentUid, name = msg, wsConn = conn}
     case msg of
       _
-        | not (prefix `T.isPrefixOf` msg) ->
+        | not ("Player" `T.isPrefixOf` msg) ->
           WS.sendTextData conn ("Wrong announcement" :: T.Text)
-        | any ($ fst client) [T.null, T.any isPunctuation, T.any isSpace] ->
-          WS.sendTextData
-            conn
-            ("Name cannot " <> "contain punctuation or whitespace, and " <>
-             "cannot be empty" :: T.Text)
-        | clientExists client clients ->
-          WS.sendTextData conn ("User already exists" :: T.Text)
         | otherwise ->
           flip finally disconnect $ do
-            modifyMVar_ state $ \s -> do
-              let s' = addClient client s
-              WS.sendTextData conn $
-                "Welcome! Users: " <> T.intercalate ", " (map fst s)
-              broadcast (fst client <> " joined") s'
-              return s'
-            talk client state
-        where prefix = "Hi! I am "
-              client = (T.drop (T.length prefix) msg, conn)
-              disconnect = do
-                s <-
-                  modifyMVar state $ \s ->
-                    let s' = removeClient client s
-                     in return (s', s')
-                broadcast (fst client <> " disconnected") s
+            modifyMVar_ serverStateMVar $ \serverState -> do
+              let clients' = addClient newClient $ clients serverState
+              WS.sendTextData conn $ T.pack $ show currentUid
+              broadcast (name newClient <> " joined") clients'
+              return $
+                ServerState {clients = clients', uidCounter = currentUid + 1}
+            talk newClient serverStateMVar
+        where disconnect = do
+                clients' <-
+                  modifyMVar serverStateMVar $ \serverState ->
+                    let clients' = removeClient newClient $ clients serverState
+                        currentUid = uidCounter serverState
+                     in return $
+                        ( ServerState
+                            {clients = clients', uidCounter = currentUid}
+                        , clients')
+                broadcast (name newClient <> " disconnected") clients'
 
 talk :: Client -> MVar ServerState -> IO ()
-talk (user, conn) state =
-  forever $ do
-    msg <- WS.receiveData conn
-    readMVar state >>= broadcast (user `mappend` ": " `mappend` msg)
+talk client serverStateMVar =
+  let clientName = name client
+      clientWSConn = wsConn client
+   in forever $ do
+        msg <- WS.receiveData clientWSConn
+        serverState <- readMVar serverStateMVar
+        broadcast (clientName `mappend` ": " `mappend` msg) $
+          clients serverState
 
 main :: IO ()
 main = do
-  state <- newMVar newServerState
-  forkIO $ WS.runServer "127.0.0.1" 8082 $ application state
+  serverStateMVar <- newMVar initialServerState
+  forkIO $ WS.runServer "127.0.0.1" 8082 $ application serverStateMVar
   runStream $ S.mapM (print) $ getMoveStream
   _ <- getLine
   return ()

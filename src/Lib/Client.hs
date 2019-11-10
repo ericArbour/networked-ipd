@@ -3,7 +3,7 @@ module Lib.Client where
 
 
 --------------------------------------------------------------------------------
-import           Control.Concurrent  (forkIO)
+import           Control.Concurrent  (forkIO, threadDelay)
 import           Control.Monad       (forever, unless)
 import           Control.Monad.Trans (liftIO)
 import           Network.Socket      (withSocketsDo)
@@ -34,6 +34,9 @@ getPostMove manager' = hoistClient api (handleError . getIOClient) (client api)
 
 -- Websockets
 --------------------------------------------------------------------------------
+delay :: Int
+delay = 1000000 
+
 app :: WS.ClientApp ()
 app conn = do
     putStrLn "Connected!"
@@ -43,10 +46,11 @@ app conn = do
         msg <- WS.receiveData conn
         liftIO $ T.putStrLn msg
 
+    WS.sendTextData conn ("Player1" :: T.Text)
     -- Read from stdin and write to WS
     let loop = do
-            line <- T.getLine
-            unless (T.null line) $ WS.sendTextData conn ("Hi! I am Tim" :: T.Text) >> loop
+            liftIO $ threadDelay delay
+            WS.sendTextData conn ("Test 1 2 3" :: T.Text) >> loop
 
     loop
     WS.sendClose conn ("Bye!" :: Text)
