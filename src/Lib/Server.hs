@@ -93,8 +93,8 @@ broadcast message clients = do
   T.putStrLn message
   forM_ clients $ \client -> WS.sendTextData (wsConn client) message
 
-application :: MVar ServerState -> WS.PendingConnection -> IO ()
-application serverStateMVar pending = do
+application :: MVar ServerState -> MVar T.Text -> WS.PendingConnection -> IO ()
+application serverStateMVar announcementMVar pending = do
   conn <- WS.acceptRequest pending
   WS.withPingThread conn 30 (return ()) $ do
     msg <- WS.receiveData conn
@@ -109,36 +109,40 @@ application serverStateMVar pending = do
           flip finally disconnect $ do
             modifyMVar_ serverStateMVar $ \serverState -> do
               let clients' = addClient newClient $ clients serverState
-              WS.sendTextData conn $ T.pack $ show currentUid
-              broadcast (name newClient <> " joined") clients'
+              WS.sendTextData conn $ T.pack $ "Your id is: " <> (show currentUid)
+              putMVar announcementMVar $ name newClient <> " joined"
               return $
                 ServerState {clients = clients', uidCounter = currentUid + 1}
-            talk newClient serverStateMVar
+            keepConnAlive newClient
         where disconnect = do
-                clients' <-
-                  modifyMVar serverStateMVar $ \serverState ->
-                    let clients' = removeClient newClient $ clients serverState
-                        currentUid = uidCounter serverState
-                     in return $
-                        ( ServerState
-                            {clients = clients', uidCounter = currentUid}
-                        , clients')
-                broadcast (name newClient <> " disconnected") clients'
+                modifyMVar_ serverStateMVar $ \serverState ->
+                  let clients' = removeClient newClient $ clients serverState
+                      currentUid = uidCounter serverState
+                   in return $
+                      ServerState {clients = clients', uidCounter = currentUid}
+                putMVar announcementMVar $ name newClient <> " disconnected"
 
-talk :: Client -> MVar ServerState -> IO ()
-talk client serverStateMVar =
-  let clientName = name client
-      clientWSConn = wsConn client
-   in forever $ do
-        msg <- WS.receiveData clientWSConn
-        serverState <- readMVar serverStateMVar
-        broadcast (clientName `mappend` ": " `mappend` msg) $
-          clients serverState
+keepConnAlive :: Client -> IO ()
+keepConnAlive client =
+   forever $ do
+     swallowTextMsg
+     return ()
+   where swallowTextMsg :: IO T.Text
+         swallowTextMsg = WS.receiveData $ wsConn client
+
+getAnnouncementStream :: MVar T.Text -> SerialT IO T.Text
+getAnnouncementStream announcementMVar = do
+  S.repeatM $ liftIO $ takeMVar announcementMVar
 
 main :: IO ()
 main = do
   serverStateMVar <- newMVar initialServerState
-  forkIO $ WS.runServer "127.0.0.1" 8082 $ application serverStateMVar
-  runStream $ S.mapM (print) $ getMoveStream
+  announcementMVar <- newEmptyMVar
+  forkIO $
+    WS.runServer "127.0.0.1" 8082 $ application serverStateMVar announcementMVar
+  let announcementStream = getAnnouncementStream announcementMVar
+      moveStream = getMoveStream
+  forkIO $ runStream $ S.mapM (print) announcementStream
+  runStream $ S.mapM (print) moveStream
   _ <- getLine
   return ()
