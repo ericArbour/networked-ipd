@@ -37,5 +37,5 @@ instance ToJSON MoveInfo
 
 instance FromJSON MoveInfo
 
-type API = "move" :> ReqBody '[ JSON] MoveInfo :> Post '[ JSON] MoveInfo
+type API = "move" :> ReqBody '[ JSON] MoveInfo :> Post '[ JSON] NoContent
 

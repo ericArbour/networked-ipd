@@ -45,10 +45,10 @@ import Lib.Shared
 server :: MVar MoveInfo -> Server API
 server moveMVar = postMove
   where
-    postMove :: MoveInfo -> Handler MoveInfo
+    postMove :: MoveInfo -> Handler NoContent
     postMove moveInfo = do
       liftIO $ putMVar moveMVar moveInfo
-      return moveInfo
+      return NoContent
 
 api :: Proxy API
 api = Proxy
@@ -56,17 +56,17 @@ api = Proxy
 app :: MVar MoveInfo -> Application
 app moveMVar = serve api (server moveMVar)
 
-getMoveStream :: SerialT IO MoveInfo
-getMoveStream = do
+runHTTPServer :: SerialT IO T.Text
+runHTTPServer = do
   moveMVar <- liftIO newEmptyMVar
   liftIO $ forkIO $ run 8081 (app moveMVar)
-  S.repeatM $ liftIO $ takeMVar moveMVar
+  S.map (T.pack . show) $ S.repeatM $ liftIO $ takeMVar moveMVar
 
 -- WebSockets
 data Client =
   Client
     { uid :: Int
-    , name :: T.Text
+    , strategy :: T.Text
     , wsConn :: WS.Connection
     }
 
@@ -88,10 +88,12 @@ addClient client clients = client : clients
 removeClient :: Client -> [Client] -> [Client]
 removeClient client = filter ((/= uid client) . uid)
 
-broadcast :: T.Text -> [Client] -> IO ()
-broadcast message clients = do
+broadcastEvent :: MVar ServerState -> T.Text -> IO ()
+broadcastEvent serverStateMVar message = do
+  serverState <- readMVar serverStateMVar
+  let clients' = clients serverState
   T.putStrLn message
-  forM_ clients $ \client -> WS.sendTextData (wsConn client) message
+  forM_ clients' $ \client -> WS.sendTextData (wsConn client) message
 
 application :: MVar ServerState -> MVar T.Text -> WS.PendingConnection -> IO ()
 application serverStateMVar announcementMVar pending = do
@@ -100,7 +102,7 @@ application serverStateMVar announcementMVar pending = do
     msg <- WS.receiveData conn
     serverState <- readMVar serverStateMVar
     let currentUid = uidCounter serverState
-        newClient = Client {uid = currentUid, name = msg, wsConn = conn}
+        newClient = Client {uid = currentUid, strategy = msg, wsConn = conn}
     case msg of
       _
         | not ("Player" `T.isPrefixOf` msg) ->
@@ -109,8 +111,9 @@ application serverStateMVar announcementMVar pending = do
           flip finally disconnect $ do
             modifyMVar_ serverStateMVar $ \serverState -> do
               let clients' = addClient newClient $ clients serverState
-              WS.sendTextData conn $ T.pack $ "Your id is: " <> (show currentUid)
-              putMVar announcementMVar $ name newClient <> " joined"
+              WS.sendTextData conn $
+                T.pack $ "Your id is: " <> (show currentUid)
+              putMVar announcementMVar $ formatAnnouncement newClient
               return $
                 ServerState {clients = clients', uidCounter = currentUid + 1}
             keepConnAlive newClient
@@ -120,29 +123,36 @@ application serverStateMVar announcementMVar pending = do
                       currentUid = uidCounter serverState
                    in return $
                       ServerState {clients = clients', uidCounter = currentUid}
-                putMVar announcementMVar $ name newClient <> " disconnected"
+                putMVar announcementMVar $
+                  (T.pack $ show $ uid newClient) <> " disconnected"
+              formatAnnouncement client =
+                "Player #" <> (T.pack $ show $ uid client) <>
+                " joined with the strategy " <>
+                strategy client
 
 keepConnAlive :: Client -> IO ()
 keepConnAlive client =
-   forever $ do
-     swallowTextMsg
-     return ()
-   where swallowTextMsg :: IO T.Text
-         swallowTextMsg = WS.receiveData $ wsConn client
+  forever $ do
+    swallowTextMsg
+    return ()
+  where
+    swallowTextMsg :: IO T.Text
+    swallowTextMsg = WS.receiveData $ wsConn client
 
-getAnnouncementStream :: MVar T.Text -> SerialT IO T.Text
-getAnnouncementStream announcementMVar = do
+runWSServer :: MVar ServerState -> SerialT IO T.Text
+runWSServer serverStateMVar = do
+  announcementMVar <- liftIO newEmptyMVar
+  liftIO $
+    forkIO $
+    WS.runServer "127.0.0.1" 8082 $ application serverStateMVar announcementMVar
   S.repeatM $ liftIO $ takeMVar announcementMVar
 
 main :: IO ()
 main = do
   serverStateMVar <- newMVar initialServerState
-  announcementMVar <- newEmptyMVar
-  forkIO $
-    WS.runServer "127.0.0.1" 8082 $ application serverStateMVar announcementMVar
-  let announcementStream = getAnnouncementStream announcementMVar
-      moveStream = getMoveStream
-  forkIO $ runStream $ S.mapM (print) announcementStream
-  runStream $ S.mapM (print) moveStream
+  let announcementStream = runWSServer serverStateMVar
+      moveStream = runHTTPServer
+      eventStream = moveStream `parallel` announcementStream
+  runStream $ S.mapM (broadcastEvent serverStateMVar) eventStream
   _ <- getLine
   return ()
