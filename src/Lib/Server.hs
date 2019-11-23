@@ -1,62 +1,38 @@
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeOperators #-}
 
 module Lib.Server where
 
 import Control.Concurrent
 import Control.Exception (finally)
-import Control.Monad.Except
-import Control.Monad.Reader
-import Data.Attoparsec.ByteString
-import Data.ByteString (ByteString)
-import Data.Char (isPunctuation, isSpace)
-import Data.Char (isPunctuation, isSpace)
-import Data.List
-import Data.Maybe
-import Data.String.Conversions
+import Control.Monad (forM_, forever)
+import Control.Monad.IO.Class (liftIO)
+import Network.Wai.Handler.Warp (run)
+
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
-import Data.Time.Calendar
-import Lucid
-import Network.HTTP.Media ((//), (/:))
-import Network.Wai
-import Network.Wai.Handler.Warp
 import qualified Network.WebSockets as WS
-import Prelude ()
-import Prelude.Compat
-import Servant
-import Servant.Types.SourceT (source)
-import Streamly
+import qualified Servant as SV
+import qualified Streamly as S
 import qualified Streamly.Prelude as S
-import System.Directory
-import Text.Blaze
-import qualified Text.Blaze.Html
-import Text.Blaze.Html.Renderer.Utf8
 
 import Lib.Shared
 
 -- HTTP
-server :: MVar MoveInfo -> Server API
+server :: MVar MoveInfo -> SV.Server API
 server moveMVar = postMove
   where
-    postMove :: MoveInfo -> Handler NoContent
+    postMove :: MoveInfo -> SV.Handler SV.NoContent
     postMove moveInfo = do
       liftIO $ putMVar moveMVar moveInfo
-      return NoContent
+      return SV.NoContent
 
-api :: Proxy API
-api = Proxy
+api :: SV.Proxy API
+api = SV.Proxy
 
-app :: MVar MoveInfo -> Application
-app moveMVar = serve api (server moveMVar)
+app :: MVar MoveInfo -> SV.Application
+app moveMVar = SV.serve api (server moveMVar)
 
-runHTTPServer :: Int -> SerialT IO T.Text
+runHTTPServer :: Int -> S.SerialT IO T.Text
 runHTTPServer port = do
   moveMVar <- liftIO newEmptyMVar
   liftIO $ forkIO $ run port (app moveMVar)
@@ -161,7 +137,7 @@ keepConnAlive client =
     swallowTextMsg :: IO T.Text
     swallowTextMsg = WS.receiveData $ wsConn client
 
-runWSServer :: Int -> MVar ServerState -> SerialT IO T.Text
+runWSServer :: Int -> MVar ServerState -> S.SerialT IO T.Text
 runWSServer port serverStateMVar = do
   announcementMVar <- liftIO newEmptyMVar
   liftIO $
@@ -175,10 +151,10 @@ runServer = do
   serverStateMVar <- newMVar initialServerState
   let moveStream = runHTTPServer httpPort
       announcementStream = runWSServer wsPort serverStateMVar
-      eventStream = moveStream `parallel` announcementStream
+      eventStream = moveStream `S.parallel` announcementStream
   putStrLn $ "HTTP server listening on port " <> (show httpPort)
   putStrLn $ "Websocket server listening on port " <> (show wsPort)
-  runStream $ S.mapM (broadcastEvent serverStateMVar) eventStream
+  S.runStream $ S.mapM (broadcastEvent serverStateMVar) eventStream
   where httpPort = 8081
         wsPort = 8082
         

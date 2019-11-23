@@ -43,6 +43,7 @@ dependencies:
 - directory
 - streamly
 - websockets
+- transformers
 
 library:
   source-dirs: src
