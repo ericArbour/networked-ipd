@@ -1,41 +1,40 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Lib.Client where
 
+module Lib.Client (runClient) where
 
---------------------------------------------------------------------------------
-import           Control.Concurrent  (forkIO, threadDelay)
-import           Control.Concurrent.MVar
-import           Control.Exception   (finally, Exception, throw)
-import           Control.Monad       (forever, unless)
-import           Control.Monad.Trans (liftIO)
-import           Control.Monad.State
-import           Network.Socket      (withSocketsDo)
-import           Data.Maybe
-import qualified Data.Text           as T
-import qualified Data.Text.IO        as T
-import Data.Typeable                 (Typeable)
-import qualified Network.WebSockets  as WS
-import Data.Proxy
-import Servant.Client
+import Control.Concurrent
+import Control.Exception (finally, Exception, throw)
+import Control.Monad (forever)
+import Control.Monad.State (StateT, get, put, evalStateT)
+import Control.Monad.Trans (liftIO)
+import Data.Maybe (fromJust, isNothing)
+import Data.Proxy (Proxy(..))
+import Data.Typeable (Typeable)
 import Network.HTTP.Client (newManager, defaultManagerSettings, Manager)
-import Streamly
+import Network.Socket (withSocketsDo)
+
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
+import qualified Network.WebSockets as WS
+import qualified Servant.Client as SV
+import qualified Streamly as S
 import qualified Streamly.Prelude as S
 
 import Lib.Shared
 
 -- HTTP
--- -----------------------------------------------------------------------------
+-------------------------------------------------------------------------------
 api :: Proxy API
 api = Proxy
 
-hoistHTTPClient :: Manager -> Client IO API
-hoistHTTPClient manager' = hoistClient api (handleError . getIOClient) (client api)
-  where baseurl = BaseUrl Http "localhost" 8081 ""
-        clientEnv :: ClientEnv
-        clientEnv = mkClientEnv manager' baseurl
-        getIOClient :: ClientM a -> IO (Either ClientError a)
-        getIOClient = flip runClientM clientEnv
-        handleError :: IO (Either ClientError a) -> IO a
+hoistHTTPClient :: Manager -> SV.Client IO API
+hoistHTTPClient manager' = SV.hoistClient api (handleError . getIOClient) (SV.client api)
+  where baseurl = SV.BaseUrl SV.Http "localhost" 8081 ""
+        clientEnv :: SV.ClientEnv
+        clientEnv = SV.mkClientEnv manager' baseurl
+        getIOClient :: SV.ClientM a -> IO (Either SV.ClientError a)
+        getIOClient = flip SV.runClientM clientEnv
+        handleError :: IO (Either SV.ClientError a) -> IO a
         handleError = fmap (either (error . show) id)
 
 -- Websockets
@@ -53,7 +52,7 @@ idPrefix = "Your id is: "
 parseId :: T.Text -> Maybe Int
 parseId = Just . read . T.unpack . T.replace idPrefix ""
 
-fakeGameLogic :: Client IO API -> T.Text -> StateT (Maybe Int) IO ()
+fakeGameLogic :: SV.Client IO API -> T.Text -> StateT (Maybe Int) IO ()
 fakeGameLogic postMove event = do
   liftIO $ T.putStrLn event
   liftIO $ threadDelay delay
@@ -62,7 +61,7 @@ fakeGameLogic postMove event = do
   liftIO $ postMove $ MoveInfo { userId = myId, move = Defect }
   return ()
 
-eventHandler :: Client IO API -> T.Text -> StateT (Maybe Int) IO ()
+eventHandler :: SV.Client IO API -> T.Text -> StateT (Maybe Int) IO ()
 eventHandler postMove event = do
   maybeId <- get
   case event of
@@ -81,14 +80,16 @@ wsClient eventMVar conn = do
       putMVar eventMVar msg
     where disconnect = WS.sendClose conn ("Bye!" :: T.Text)
 
-getEventStream :: SerialT (StateT (Maybe Int) IO) T.Text
+getEventStream :: S.SerialT (StateT (Maybe Int) IO) T.Text
 getEventStream = do
   eventMVar <- liftIO newEmptyMVar
   liftIO $ forkIO $ withSocketsDo $ WS.runClient "127.0.0.1" 8082 "/" (wsClient eventMVar)
   S.repeatM $ liftIO $ takeMVar eventMVar
+
+-- Main
 --------------------------------------------------------------------------------
 runClient :: IO ()
 runClient = do
   manager' <- newManager defaultManagerSettings
   let postMove = hoistHTTPClient manager'
-  evalStateT (runStream $ S.mapM (eventHandler postMove) $ getEventStream) Nothing
+  evalStateT (S.runStream $ S.mapM (eventHandler postMove) $ getEventStream) Nothing

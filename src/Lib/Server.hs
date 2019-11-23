@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Lib.Server where
+module Lib.Server (runServer) where
 
 import Control.Concurrent
 import Control.Exception (finally)
 import Control.Monad (forM_, forever)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans (liftIO)
 import Network.Wai.Handler.Warp (run)
 
 import qualified Data.Text as T
@@ -18,6 +18,7 @@ import qualified Streamly.Prelude as S
 import Lib.Shared
 
 -- HTTP
+-------------------------------------------------------------------------------------
 server :: MVar MoveInfo -> SV.Server API
 server moveMVar = postMove
   where
@@ -39,6 +40,7 @@ runHTTPServer port = do
   S.map (T.pack . show) $ S.repeatM $ liftIO $ takeMVar moveMVar
 
 -- WebSockets
+--------------------------------------------------------------------------------------
 data Client =
   Client
     { uid :: Int
@@ -145,6 +147,8 @@ runWSServer port serverStateMVar = do
     WS.runServer "127.0.0.1" port $ application serverStateMVar announcementMVar
   S.repeatM $ liftIO $ takeMVar announcementMVar
 
+-- Main
+--------------------------------------------------------------------------------------
 runServer :: IO ()
 runServer = do
   putStrLn "Starting server..."
