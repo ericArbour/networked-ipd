@@ -2,11 +2,15 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Lib.Shared where
+module Lib.Shared
+  ( MoveInfo(..)
+  , Move(..)
+  , API
+  ) where
 
-import Servant
-import Data.Aeson.Types (ToJSON, FromJSON)
+import Data.Aeson.Types (FromJSON, ToJSON)
 import GHC.Generics (Generic)
+import Servant
 
 data Move
   = Cooperate
@@ -29,4 +33,3 @@ instance ToJSON MoveInfo
 instance FromJSON MoveInfo
 
 type API = "move" :> ReqBody '[ JSON] MoveInfo :> Post '[ JSON] NoContent
-

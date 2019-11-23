@@ -1,6 +1,6 @@
 module Main where
 
-import Lib.Client
+import Lib.Client (runClient)
 
 main :: IO ()
 main = runClient
