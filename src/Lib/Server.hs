@@ -74,10 +74,12 @@ data ServerState =
   ServerState
     { clients :: [Client]
     , uidCounter :: Int
+    , eventHistory :: T.Text
     }
 
 initialServerState :: ServerState
-initialServerState = ServerState {clients = [], uidCounter = 1}
+initialServerState =
+  ServerState {clients = [], uidCounter = 1, eventHistory = ""}
 
 numClients :: [Client] -> Int
 numClients = length
@@ -93,6 +95,13 @@ broadcastEvent serverStateMVar message = do
   serverState <- readMVar serverStateMVar
   let clients' = clients serverState
   T.putStrLn message
+  modifyMVar_ serverStateMVar $ \serverState -> do
+    return $
+      ServerState
+        { clients = clients serverState
+        , uidCounter = uidCounter serverState
+        , eventHistory = eventHistory serverState <> "\n" <> message
+        }
   forM_ clients' $ \client -> WS.sendTextData (wsConn client) message
 
 application :: MVar ServerState -> MVar T.Text -> WS.PendingConnection -> IO ()
@@ -105,30 +114,39 @@ application serverStateMVar announcementMVar pending = do
         newClient = Client {uid = currentUid, strategy = msg, wsConn = conn}
     case msg of
       _
-        | not ("Player" `T.isPrefixOf` msg) ->
-          WS.sendTextData conn ("Wrong announcement" :: T.Text)
+        | not (msg == "Default Strategy") ->
+          WS.sendTextData conn ("Invalid strategy." :: T.Text)
         | otherwise ->
           flip finally disconnect $ do
             modifyMVar_ serverStateMVar $ \serverState -> do
               let clients' = addClient newClient $ clients serverState
               WS.sendTextData conn $
                 T.pack $ "Your id is: " <> (show currentUid)
+              WS.sendTextData conn $ (T.pack "Event history: ") <> eventHistory serverState
               putMVar announcementMVar $ formatAnnouncement newClient
               return $
-                ServerState {clients = clients', uidCounter = currentUid + 1}
+                ServerState
+                  { clients = clients'
+                  , uidCounter = currentUid + 1
+                  , eventHistory = eventHistory serverState
+                  }
             keepConnAlive newClient
         where disconnect = do
                 modifyMVar_ serverStateMVar $ \serverState ->
                   let clients' = removeClient newClient $ clients serverState
                       currentUid = uidCounter serverState
                    in return $
-                      ServerState {clients = clients', uidCounter = currentUid}
+                      ServerState
+                        { clients = clients'
+                        , uidCounter = currentUid
+                        , eventHistory = eventHistory serverState
+                        }
                 putMVar announcementMVar $
                   (T.pack $ show $ uid newClient) <> " disconnected"
               formatAnnouncement client =
                 "Player #" <> (T.pack $ show $ uid client) <>
                 " joined with the strategy " <>
-                strategy client
+                strategy client <> "."
 
 keepConnAlive :: Client -> IO ()
 keepConnAlive client =
