@@ -20,28 +20,16 @@ extra-source-files:
 description:         Please see the README on GitHub at <https://github.com/githubuser/networked-ipd#readme>
 
 dependencies:
-- base >= 4.7 && < 5
-- servant
-- servant-server
-- servant-client
-- base-compat
-- mtl
 - aeson
-- lucid
-- network
-- text
-- blaze-html
-- blaze-markup
-- wai
-- warp
-- http-media
+- base >= 4.7 && < 5
 - http-client
-- attoparsec
-- bytestring
-- string-conversions
-- time
-- directory
+- mtl
+- network
+- servant-client
+- servant-server
 - streamly
+- text
+- warp
 - websockets
 
 library:
