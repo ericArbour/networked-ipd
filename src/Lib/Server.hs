@@ -56,10 +56,10 @@ api = Proxy
 app :: MVar MoveInfo -> Application
 app moveMVar = serve api (server moveMVar)
 
-runHTTPServer :: SerialT IO T.Text
-runHTTPServer = do
+runHTTPServer :: Int -> SerialT IO T.Text
+runHTTPServer port = do
   moveMVar <- liftIO newEmptyMVar
-  liftIO $ forkIO $ run 8081 (app moveMVar)
+  liftIO $ forkIO $ run port (app moveMVar)
   S.map (T.pack . show) $ S.repeatM $ liftIO $ takeMVar moveMVar
 
 -- WebSockets
@@ -104,6 +104,15 @@ broadcastEvent serverStateMVar message = do
         }
   forM_ clients' $ \client -> WS.sendTextData (wsConn client) message
 
+joinAnnouncement :: Client -> T.Text
+joinAnnouncement client =
+                "Player #" <> (T.pack $ show $ uid client) <>
+                " joined with the strategy " <>
+                strategy client <> "."
+
+disconnectAnnouncement :: Client -> T.Text
+disconnectAnnouncement client = "Player #" <> (T.pack $ show $ uid client) <> " disconnected."
+
 application :: MVar ServerState -> MVar T.Text -> WS.PendingConnection -> IO ()
 application serverStateMVar announcementMVar pending = do
   conn <- WS.acceptRequest pending
@@ -123,7 +132,7 @@ application serverStateMVar announcementMVar pending = do
               WS.sendTextData conn $
                 T.pack $ "Your id is: " <> (show currentUid)
               WS.sendTextData conn $ (T.pack "Event history: ") <> eventHistory serverState
-              putMVar announcementMVar $ formatAnnouncement newClient
+              putMVar announcementMVar $ joinAnnouncement newClient
               return $
                 ServerState
                   { clients = clients'
@@ -141,12 +150,7 @@ application serverStateMVar announcementMVar pending = do
                         , uidCounter = currentUid
                         , eventHistory = eventHistory serverState
                         }
-                putMVar announcementMVar $
-                  (T.pack $ show $ uid newClient) <> " disconnected"
-              formatAnnouncement client =
-                "Player #" <> (T.pack $ show $ uid client) <>
-                " joined with the strategy " <>
-                strategy client <> "."
+                putMVar announcementMVar $ disconnectAnnouncement newClient 
 
 keepConnAlive :: Client -> IO ()
 keepConnAlive client =
@@ -157,20 +161,24 @@ keepConnAlive client =
     swallowTextMsg :: IO T.Text
     swallowTextMsg = WS.receiveData $ wsConn client
 
-runWSServer :: MVar ServerState -> SerialT IO T.Text
-runWSServer serverStateMVar = do
+runWSServer :: Int -> MVar ServerState -> SerialT IO T.Text
+runWSServer port serverStateMVar = do
   announcementMVar <- liftIO newEmptyMVar
   liftIO $
     forkIO $
-    WS.runServer "127.0.0.1" 8082 $ application serverStateMVar announcementMVar
+    WS.runServer "127.0.0.1" port $ application serverStateMVar announcementMVar
   S.repeatM $ liftIO $ takeMVar announcementMVar
 
-main :: IO ()
-main = do
+runServer :: IO ()
+runServer = do
+  putStrLn "Starting server..."
   serverStateMVar <- newMVar initialServerState
-  let announcementStream = runWSServer serverStateMVar
-      moveStream = runHTTPServer
+  let moveStream = runHTTPServer httpPort
+      announcementStream = runWSServer wsPort serverStateMVar
       eventStream = moveStream `parallel` announcementStream
+  putStrLn $ "HTTP server listening on port " <> (show httpPort)
+  putStrLn $ "Websocket server listening on port " <> (show wsPort)
   runStream $ S.mapM (broadcastEvent serverStateMVar) eventStream
-  _ <- getLine
-  return ()
+  where httpPort = 8081
+        wsPort = 8082
+        

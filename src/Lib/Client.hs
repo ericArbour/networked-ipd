@@ -87,8 +87,8 @@ getEventStream = do
   liftIO $ forkIO $ withSocketsDo $ WS.runClient "127.0.0.1" 8082 "/" (wsClient eventMVar)
   S.repeatM $ liftIO $ takeMVar eventMVar
 --------------------------------------------------------------------------------
-main2 :: IO ()
-main2 = do
+runClient :: IO ()
+runClient = do
   manager' <- newManager defaultManagerSettings
   let postMove = hoistHTTPClient manager'
   evalStateT (runStream $ S.mapM (eventHandler postMove) $ getEventStream) Nothing

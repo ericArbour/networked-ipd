@@ -48,9 +48,18 @@ library:
   source-dirs: src
 
 executables:
-  networked-ipd-exe:
-    main:                Main.hs
-    source-dirs:         app
+  server-exe:
+    main: Server-Main.hs
+    source-dirs: app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - networked-ipd
+  client-exe:
+    main: Client-Main.hs
+    source-dirs: app
     ghc-options:
     - -threaded
     - -rtsopts
