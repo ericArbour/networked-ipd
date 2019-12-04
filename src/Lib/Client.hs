@@ -74,10 +74,10 @@ wsClient eventMVar conn = do
 getEventStream :: S.SerialT (StateT (Maybe Int) IO) T.Text
 getEventStream = do
   eventMVar <- liftIO newEmptyMVar
-  liftIO $
-    forkIO $
+  liftIO .
+    forkIO .
     withSocketsDo $ WS.runClient "127.0.0.1" 8082 "/" (wsClient eventMVar)
-  S.repeatM $ liftIO $ takeMVar eventMVar
+  S.repeatM . liftIO $ takeMVar eventMVar
 
 -- Game
 -------------------------------------------------------------------------------
@@ -87,7 +87,7 @@ fakeGameLogic postMove event = do
   liftIO $ threadDelay delay
   maybeId <- get
   let myId = fromJust maybeId
-  liftIO $ postMove $ MoveInfo {userId = myId, move = Defect}
+  liftIO . postMove $ MoveInfo {userId = myId, move = Defect}
   return ()
 
 eventHandler :: SV.Client IO API -> T.Text -> StateT (Maybe Int) IO ()
@@ -111,5 +111,5 @@ runClient = do
   manager' <- newManager defaultManagerSettings
   let postMove = hoistHTTPClient manager'
       runEventStream =
-        S.runStream $ S.mapM (eventHandler postMove) $ getEventStream
+        S.runStream . S.mapM (eventHandler postMove) $ getEventStream
   evalStateT runEventStream Nothing
