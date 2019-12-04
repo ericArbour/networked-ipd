@@ -38,8 +38,8 @@ app moveMVar = SV.serve api (server moveMVar)
 runHTTPServer :: Int -> S.SerialT IO T.Text
 runHTTPServer port = do
   moveMVar <- liftIO newEmptyMVar
-  liftIO $ forkIO $ run port (app moveMVar)
-  S.map (T.pack . show) $ S.repeatM $ liftIO $ takeMVar moveMVar
+  liftIO . forkIO $ run port (app moveMVar)
+  S.map (T.pack . show) . S.repeatM . liftIO $ takeMVar moveMVar
 
 -- WebSockets
 --------------------------------------------------------------------------------------
@@ -69,13 +69,13 @@ removeClient client = filter ((/= uid client) . uid)
 
 joinAnnouncement :: Client -> T.Text
 joinAnnouncement client =
-  "Player #" <> (T.pack $ show $ uid client) <> " joined with the strategy " <>
+  "Player #" <> (T.pack . show $ uid client) <> " joined with the strategy " <>
   strategy client <>
   "."
 
 disconnectAnnouncement :: Client -> T.Text
 disconnectAnnouncement client =
-  "Player #" <> (T.pack $ show $ uid client) <> " disconnected."
+  "Player #" <> (T.pack . show $ uid client) <> " disconnected."
 
 broadcastEvent :: MVar ServerState -> T.Text -> IO ()
 broadcastEvent serverStateMVar event = do
@@ -122,10 +122,10 @@ application serverStateMVar announcementMVar pending = do
           flip finally disconnect $ do
             modifyMVar_ serverStateMVar $ \serverState -> do
               let clients' = addClient newClient $ clients serverState
+              WS.sendTextData conn .
+                T.pack $ "Your id is: " <> show currentUid
               WS.sendTextData conn $
-                T.pack $ "Your id is: " <> (show currentUid)
-              WS.sendTextData conn $
-                (T.pack "Event history: ") <> eventHistory serverState
+                T.pack "Event history: " <> eventHistory serverState
               putMVar announcementMVar $ joinAnnouncement newClient
               return $
                 ServerState
@@ -148,10 +148,9 @@ application serverStateMVar announcementMVar pending = do
 runWSServer :: Int -> MVar ServerState -> S.SerialT IO T.Text
 runWSServer port serverStateMVar = do
   announcementMVar <- liftIO newEmptyMVar
-  liftIO $
-    forkIO $
-    WS.runServer "127.0.0.1" port $ application serverStateMVar announcementMVar
-  S.repeatM $ liftIO $ takeMVar announcementMVar
+  liftIO . forkIO . WS.runServer "127.0.0.1" port $
+    application serverStateMVar announcementMVar
+  S.repeatM . liftIO $ takeMVar announcementMVar
 
 -- Main
 --------------------------------------------------------------------------------------
