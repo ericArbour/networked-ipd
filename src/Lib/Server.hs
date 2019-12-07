@@ -109,32 +109,29 @@ application serverStateMVar announcementMVar pending = do
   WS.withPingThread conn 30 (return ()) $
     -- Process initial announcement
    do
-    msg <- WS.receiveData conn
-    serverState <- readMVar serverStateMVar
-    let currentUid = uidCounter serverState
-        newClient = Client {uid = currentUid, strategy = msg, wsConn = conn}
+    msg <- WS.receiveData conn 
     case msg of
       _
           -- restrict clients to predefined strategies.
         | not (msg == "Default Strategy") ->
           WS.sendTextData conn ("Invalid strategy." :: T.Text)
-        | otherwise ->
-          flip finally disconnect $ do
-            modifyMVar_ serverStateMVar $ \serverState -> do
-              let clients' = addClient newClient $ clients serverState
-              WS.sendTextData conn .
-                T.pack $ "Your id is: " <> show currentUid
-              WS.sendTextData conn $
-                T.pack "Event history: " <> eventHistory serverState
-              putMVar announcementMVar $ joinAnnouncement newClient
+        | otherwise -> do
+          newClient <- modifyMVar serverStateMVar $ \serverState -> do
+              let currentUid = uidCounter serverState
+                  newClient = Client {uid = currentUid, strategy = msg, wsConn = conn}
+                  clients' = addClient newClient $ clients serverState 
               return $
-                ServerState
+                (ServerState
                   { clients = clients'
                   , uidCounter = currentUid + 1
                   , eventHistory = eventHistory serverState
-                  }
-            keepConnAlive newClient
-        where disconnect = do
+                  }, newClient)
+          WS.sendTextData conn . T.pack $ "Your id is: " <> (show $ uid newClient)
+          serverState <- readMVar serverStateMVar
+          WS.sendTextData conn $ T.pack "Event history: " <> eventHistory serverState
+          putMVar announcementMVar $ joinAnnouncement newClient
+          flip finally (disconnect newClient) (keepConnAlive newClient)
+        where disconnect newClient = do
                 modifyMVar_ serverStateMVar $ \serverState ->
                   let clients' = removeClient newClient $ clients serverState
                    in return $
