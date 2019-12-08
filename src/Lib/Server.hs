@@ -93,14 +93,14 @@ broadcastEvent serverStateMVar event = do
 
 -- Handler for all additional incoming websocket data
 -- The server doesn't accept websocket data after initial announcement so it is ignored
-keepConnAlive :: Client -> IO ()
-keepConnAlive client =
+keepConnAlive :: WS.Connection -> IO ()
+keepConnAlive conn =
   forever $ do
     swallowTextMsg
     return ()
   where
     swallowTextMsg :: IO T.Text
-    swallowTextMsg = WS.receiveData $ wsConn client
+    swallowTextMsg = WS.receiveData conn
 
 -- Handle incoming websocket connection requests
 application :: MVar ServerState -> MVar T.Text -> WS.PendingConnection -> IO ()
@@ -109,43 +109,45 @@ application serverStateMVar announcementMVar pending = do
   WS.withPingThread conn 30 (return ()) $
     -- Process initial announcement
    do
-    msg <- WS.receiveData conn
-    case msg of
+    strategy' <- WS.receiveData conn
+    case strategy of
       _
           -- restrict clients to predefined strategies.
-        | not (msg == "Default Strategy") ->
+        | strategy' /= "Default Strategy" ->
           WS.sendTextData conn ("Invalid strategy." :: T.Text)
         | otherwise -> do
           newClient <-
-            modifyMVar serverStateMVar $ \serverState -> do
+            modifyMVar serverStateMVar $ \serverState ->
               let currentUid = uidCounter serverState
                   newClient =
-                    Client {uid = currentUid, strategy = msg, wsConn = conn}
+                    Client
+                      {uid = currentUid, strategy = strategy', wsConn = conn}
                   clients' = addClient newClient $ clients serverState
-              return $
-                ( ServerState
-                    { clients = clients'
-                    , uidCounter = currentUid + 1
-                    , eventHistory = eventHistory serverState
-                    }
-                , newClient)
+               in return $
+                  ( ServerState
+                      { clients = clients'
+                      , uidCounter = currentUid + 1
+                      , eventHistory = eventHistory serverState
+                      }
+                  , newClient)
           WS.sendTextData conn . T.pack $
             "Your id is: " <> (show $ uid newClient)
           serverState <- readMVar serverStateMVar
           WS.sendTextData conn $
             T.pack "Event history: " <> eventHistory serverState
           putMVar announcementMVar $ joinAnnouncement newClient
-          flip finally (disconnect newClient) (keepConnAlive newClient)
-        where disconnect newClient = do
-                modifyMVar_ serverStateMVar $ \serverState ->
-                  let clients' = removeClient newClient $ clients serverState
-                   in return $
-                      ServerState
-                        { clients = clients'
-                        , uidCounter = uidCounter serverState
-                        , eventHistory = eventHistory serverState
-                        }
-                putMVar announcementMVar $ disconnectAnnouncement newClient
+          flip finally (disconnect newClient) $ keepConnAlive conn
+  where
+    disconnect newClient = do
+      modifyMVar_ serverStateMVar $ \serverState ->
+        let clients' = removeClient newClient $ clients serverState
+         in return $
+            ServerState
+              { clients = clients'
+              , uidCounter = uidCounter serverState
+              , eventHistory = eventHistory serverState
+              }
+      putMVar announcementMVar $ disconnectAnnouncement newClient
 
 runWSServer :: Int -> MVar ServerState -> S.SerialT IO T.Text
 runWSServer port serverStateMVar = do
