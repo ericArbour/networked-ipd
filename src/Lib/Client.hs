@@ -6,7 +6,7 @@ module Lib.Client
 
 import Control.Concurrent
 import Control.Exception (Exception, finally, throw)
-import Control.Monad (forever)
+import Control.Monad (forever, when)
 import Control.Monad.State (StateT, evalStateT, get, put)
 import Control.Monad.Trans (liftIO)
 import Data.Maybe (fromJust, isNothing)
@@ -48,16 +48,16 @@ delay = 1000000
 
 data GameException
   = InvalidStrategy
-  | CannotParseId
+  | NoStreamFound
   deriving (Show, Typeable)
 
 instance Exception GameException
 
-idPrefix :: T.Text
-idPrefix = "Your id is: "
+idAssignmentPrefix :: T.Text
+idAssignmentPrefix = "Your id is: "
 
-parseId :: T.Text -> Maybe Int
-parseId = Just . read . T.unpack . T.replace idPrefix ""
+parseId :: T.Text -> Int
+parseId = read . T.unpack . T.replace idAssignmentPrefix ""
 
 wsClient :: MVar T.Text -> WS.ClientApp ()
 wsClient eventMVar conn = do
@@ -71,38 +71,21 @@ wsClient eventMVar conn = do
   where
     disconnect = WS.sendClose conn ("Bye!" :: T.Text)
 
-getEventStream :: S.SerialT (StateT (Maybe Int) IO) T.Text
+getEventStream :: S.SerialT IO T.Text
 getEventStream = do
   eventMVar <- liftIO newEmptyMVar
-  liftIO .
-    forkIO .
-    withSocketsDo $ WS.runClient "127.0.0.1" 8082 "/" (wsClient eventMVar)
+  liftIO . forkIO . withSocketsDo $
+    WS.runClient "127.0.0.1" 8082 "/" (wsClient eventMVar)
   S.repeatM . liftIO $ takeMVar eventMVar
 
 -- Game
 -------------------------------------------------------------------------------
-fakeGameLogic :: SV.Client IO API -> T.Text -> StateT (Maybe Int) IO ()
-fakeGameLogic postMove event = do
-  liftIO $ T.putStrLn event
-  liftIO $ threadDelay delay
-  maybeId <- get
-  let myId = fromJust maybeId
-  liftIO . postMove $ MoveInfo {userId = myId, move = Defect}
-  return ()
-
-eventHandler :: SV.Client IO API -> T.Text -> StateT (Maybe Int) IO ()
-eventHandler postMove event = do
-  maybeId <- get
-  case event of
-    _
-        -- If server does not assign an id after initial announcement, assume invalid strategy
-      | isNothing maybeId && not (idPrefix `T.isPrefixOf` event) ->
-        throw InvalidStrategy
-        -- If server does assign an id after initial announcement, store id on state and proceed to game
-      | isNothing maybeId && idPrefix `T.isPrefixOf` event -> do
-        put $ parseId event
-        fakeGameLogic postMove event
-      | otherwise -> fakeGameLogic postMove event
+eventHandler :: Int -> SV.Client IO API -> String -> T.Text -> IO String
+eventHandler myId postMove gameState event = do
+  T.putStrLn event
+  threadDelay delay
+  postMove $ MoveInfo {userId = myId, move = Defect}
+  return gameState
 
 -- Main
 --------------------------------------------------------------------------------
@@ -110,6 +93,12 @@ runClient :: IO ()
 runClient = do
   manager' <- newManager defaultManagerSettings
   let postMove = hoistHTTPClient manager'
-      runEventStream =
-        S.runStream . S.mapM (eventHandler postMove) $ getEventStream
-  evalStateT runEventStream Nothing
+  decompS <- S.uncons $ getEventStream
+  case decompS of
+    Nothing -> throw NoStreamFound
+    Just (firstEvent, s) -> do
+      when (not $ idAssignmentPrefix `T.isPrefixOf` firstEvent) $
+        throw InvalidStrategy
+      let myId = parseId firstEvent
+      S.foldlM' (eventHandler myId postMove) "Game State Placeholder" s
+  return ()
