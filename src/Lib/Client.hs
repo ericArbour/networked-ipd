@@ -7,7 +7,6 @@ module Lib.Client
 import Control.Concurrent
 import Control.Exception (Exception, finally, throw)
 import Control.Monad (forever, when)
-import Control.Monad.State (StateT, evalStateT, get, put)
 import Control.Monad.Trans (liftIO)
 import Data.Maybe (fromJust, isNothing)
 import Data.Proxy (Proxy(..))
@@ -93,7 +92,7 @@ runClient :: IO ()
 runClient = do
   manager' <- newManager defaultManagerSettings
   let postMove = hoistHTTPClient manager'
-  decompS <- S.uncons $ getEventStream
+  decompS <- S.uncons getEventStream
   case decompS of
     Nothing -> throw NoStreamFound
     Just (firstEvent, s) -> do
