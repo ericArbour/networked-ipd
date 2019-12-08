@@ -109,26 +109,31 @@ application serverStateMVar announcementMVar pending = do
   WS.withPingThread conn 30 (return ()) $
     -- Process initial announcement
    do
-    msg <- WS.receiveData conn 
+    msg <- WS.receiveData conn
     case msg of
       _
           -- restrict clients to predefined strategies.
         | not (msg == "Default Strategy") ->
           WS.sendTextData conn ("Invalid strategy." :: T.Text)
         | otherwise -> do
-          newClient <- modifyMVar serverStateMVar $ \serverState -> do
+          newClient <-
+            modifyMVar serverStateMVar $ \serverState -> do
               let currentUid = uidCounter serverState
-                  newClient = Client {uid = currentUid, strategy = msg, wsConn = conn}
-                  clients' = addClient newClient $ clients serverState 
+                  newClient =
+                    Client {uid = currentUid, strategy = msg, wsConn = conn}
+                  clients' = addClient newClient $ clients serverState
               return $
-                (ServerState
-                  { clients = clients'
-                  , uidCounter = currentUid + 1
-                  , eventHistory = eventHistory serverState
-                  }, newClient)
-          WS.sendTextData conn . T.pack $ "Your id is: " <> (show $ uid newClient)
+                ( ServerState
+                    { clients = clients'
+                    , uidCounter = currentUid + 1
+                    , eventHistory = eventHistory serverState
+                    }
+                , newClient)
+          WS.sendTextData conn . T.pack $
+            "Your id is: " <> (show $ uid newClient)
           serverState <- readMVar serverStateMVar
-          WS.sendTextData conn $ T.pack "Event history: " <> eventHistory serverState
+          WS.sendTextData conn $
+            T.pack "Event history: " <> eventHistory serverState
           putMVar announcementMVar $ joinAnnouncement newClient
           flip finally (disconnect newClient) (keepConnAlive newClient)
         where disconnect newClient = do
