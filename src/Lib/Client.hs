@@ -13,6 +13,7 @@ import Data.Proxy (Proxy(..))
 import Data.Typeable (Typeable)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.Socket (withSocketsDo)
+import Text.Read (readMaybe)
 
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
@@ -42,22 +43,6 @@ hoistHTTPClient manager' =
 
 -- Websockets
 --------------------------------------------------------------------------------
-delay :: Int
-delay = 1000000
-
-data GameException
-  = InvalidStrategy
-  | NoStreamFound
-  deriving (Show, Typeable)
-
-instance Exception GameException
-
-idAssignmentPrefix :: T.Text
-idAssignmentPrefix = "Your id is: "
-
-parseId :: T.Text -> Int
-parseId = read . T.unpack . T.replace idAssignmentPrefix ""
-
 wsClient :: MVar T.Text -> WS.ClientApp ()
 wsClient eventMVar conn = do
   putStrLn "Connected!"
@@ -79,6 +64,23 @@ getEventStream = do
 
 -- Game
 -------------------------------------------------------------------------------
+delay :: Int
+delay = 1000000
+
+data GameException
+  = InvalidStrategy
+  | NoStreamFound
+  | CannotParseId
+  deriving (Show, Typeable)
+
+instance Exception GameException
+
+idAssignmentPrefix :: T.Text
+idAssignmentPrefix = "Your id is: "
+
+parseId :: T.Text -> Maybe Int
+parseId = readMaybe . T.unpack . T.replace idAssignmentPrefix ""
+
 eventHandler :: Int -> SV.Client IO API -> String -> T.Text -> IO String
 eventHandler myId postMove gameState event = do
   T.putStrLn event
@@ -98,6 +100,8 @@ runClient = do
     Just (firstEvent, s) -> do
       when (not $ idAssignmentPrefix `T.isPrefixOf` firstEvent) $
         throw InvalidStrategy
-      let myId = parseId firstEvent
-      S.foldlM' (eventHandler myId postMove) "Game State Placeholder" s
+      case parseId firstEvent of
+        Nothing -> throw CannotParseId
+        Just myId ->
+          S.foldlM' (eventHandler myId postMove) "Game State Placeholder" s
   return ()
