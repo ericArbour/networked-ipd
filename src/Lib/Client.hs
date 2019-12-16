@@ -8,7 +8,7 @@ import Control.Concurrent
 import Control.Exception (Exception, finally, throw)
 import Control.Monad (forever, when)
 import Control.Monad.Trans (liftIO)
-import Data.Maybe (fromJust, isNothing)
+import Data.Maybe (maybe)
 import Data.Proxy (Proxy(..))
 import Data.Typeable (Typeable)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
@@ -94,14 +94,11 @@ runClient :: IO ()
 runClient = do
   manager' <- newManager defaultManagerSettings
   let postMove = hoistHTTPClient manager'
-  decompS <- S.uncons getEventStream
-  case decompS of
-    Nothing -> throw NoStreamFound
-    Just (firstEvent, s) -> do
-      when (not $ idAssignmentPrefix `T.isPrefixOf` firstEvent) $
-        throw InvalidStrategy
-      case parseId firstEvent of
-        Nothing -> throw $ CannotParseId firstEvent
-        Just myId ->
-          S.foldlM' (eventHandler myId postMove) "Game State Placeholder" s
+  maybeDecompStream <- S.uncons getEventStream
+  (firstEvent, streamTail) <-
+    maybe (throw NoStreamFound) return maybeDecompStream
+  when (not $ idAssignmentPrefix `T.isPrefixOf` firstEvent) $
+    throw InvalidStrategy
+  myId <- maybe (throw $ CannotParseId firstEvent) return $ parseId firstEvent
+  S.foldlM' (eventHandler myId postMove) "Game State Placeholder" streamTail
   return ()
