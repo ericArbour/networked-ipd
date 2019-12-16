@@ -70,7 +70,7 @@ delay = 1000000
 data GameException
   = InvalidStrategy
   | NoStreamFound
-  | CannotParseId
+  | CannotParseId T.Text
   deriving (Show, Typeable)
 
 instance Exception GameException
@@ -101,7 +101,7 @@ runClient = do
       when (not $ idAssignmentPrefix `T.isPrefixOf` firstEvent) $
         throw InvalidStrategy
       case parseId firstEvent of
-        Nothing -> throw CannotParseId
+        Nothing -> throw $ CannotParseId firstEvent
         Just myId ->
           S.foldlM' (eventHandler myId postMove) "Game State Placeholder" s
   return ()
