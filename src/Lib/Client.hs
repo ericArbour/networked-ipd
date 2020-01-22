@@ -8,13 +8,16 @@ import Control.Concurrent
 import Control.Exception (Exception, finally, throw)
 import Control.Monad (forever, when)
 import Control.Monad.Trans (liftIO)
-import Data.Maybe (maybe)
+import Data.ByteString.Lazy (ByteString)
+import Data.List (intersperse)
+import Data.Maybe (fromJust, maybe)
 import Data.Proxy (Proxy(..))
 import Data.Typeable (Typeable)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.Socket (withSocketsDo)
 import Text.Read (readMaybe)
 
+import qualified Data.Aeson as A
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Network.WebSockets as WS
@@ -22,7 +25,30 @@ import qualified Servant.Client as SV
 import qualified Streamly as S
 import qualified Streamly.Prelude as S
 
-import Lib.Shared (API, Move(..), MoveInfo(..))
+import Lib.Shared
+  ( API
+  , Event(..)
+  , IdAssignment(..)
+  , Move(..)
+  , PlayerMove(..)
+  , Strategy(..)
+  )
+
+type ClientState = ([Event], String)
+
+data GameException
+  = InvalidStrategy
+  | NoStreamFound
+  | CannotParse ByteString
+  | InvalidEvent ByteString
+  deriving (Show, Typeable)
+
+instance Exception GameException
+
+-- Helpers
+-------------------------------------------------------------------------------
+formatEventHistory :: [Event] -> String
+formatEventHistory = foldr (<>) "" . intersperse "\n" . map show . reverse
 
 -- HTTP
 -------------------------------------------------------------------------------
@@ -43,49 +69,42 @@ hoistHTTPClient manager' =
 
 -- Websockets
 --------------------------------------------------------------------------------
-wsClient :: MVar T.Text -> WS.ClientApp ()
-wsClient eventMVar conn = do
+wsClient :: MVar ByteString -> WS.ClientApp ()
+wsClient btstrMVar conn = do
   putStrLn "Connected!"
   -- Announce strategy to server
-  WS.sendTextData conn ("Default Strategy" :: T.Text)
+  WS.sendTextData conn . A.encode $ Default
   flip finally disconnect $
     forever $ do
-      msg <- WS.receiveData conn
-      putMVar eventMVar msg
+      btstr <- WS.receiveData conn
+      putMVar btstrMVar btstr
   where
     disconnect = WS.sendClose conn ("Bye!" :: T.Text)
 
-getEventStream :: S.SerialT IO T.Text
-getEventStream = do
-  eventMVar <- liftIO newEmptyMVar
+getWSStream :: S.SerialT IO ByteString
+getWSStream = do
+  btstrMVar <- liftIO newEmptyMVar
   liftIO . forkIO . withSocketsDo $
-    WS.runClient "127.0.0.1" 8082 "/" (wsClient eventMVar)
-  S.repeatM . liftIO $ takeMVar eventMVar
+    WS.runClient "127.0.0.1" 8082 "/" (wsClient btstrMVar)
+  S.repeatM . liftIO $ takeMVar btstrMVar
+
+getEventStream :: S.SerialT IO ByteString -> S.SerialT IO Event
+getEventStream btstrStream = S.mapM decodeOrFail btstrStream
+  where
+    decodeOrFail :: ByteString -> IO Event
+    decodeOrFail e = maybe (throw $ InvalidEvent e) return (A.decode e)
 
 -- Game
 -------------------------------------------------------------------------------
 delay :: Int
 delay = 1000000
 
-data GameException
-  = InvalidStrategy
-  | NoStreamFound
-  | CannotParseId T.Text
-  deriving (Show, Typeable)
-
-instance Exception GameException
-
-idAssignmentPrefix :: T.Text
-idAssignmentPrefix = "Your id is: "
-
-parseId :: T.Text -> Maybe Int
-parseId = readMaybe . T.unpack . T.replace idAssignmentPrefix ""
-
-eventHandler :: Int -> SV.Client IO API -> String -> T.Text -> IO String
+eventHandler ::
+     Int -> SV.Client IO API -> ClientState -> Event -> IO ClientState
 eventHandler myId postMove gameState event = do
-  T.putStrLn event
+  putStrLn (show event)
   threadDelay delay
-  postMove $ MoveInfo {userId = myId, move = Defect}
+  postMove $ PlayerMove myId Defect
   return gameState
 
 -- Main
@@ -94,11 +113,13 @@ runClient :: IO ()
 runClient = do
   manager' <- newManager defaultManagerSettings
   let postMove = hoistHTTPClient manager'
-  maybeDecompStream <- S.uncons getEventStream
-  (firstEvent, streamTail) <-
+  maybeDecompStream <- S.uncons getWSStream
+  (initialData, streamTail) <-
     maybe (throw NoStreamFound) return maybeDecompStream
-  when (not $ idAssignmentPrefix `T.isPrefixOf` firstEvent) $
-    throw InvalidStrategy
-  myId <- maybe (throw $ CannotParseId firstEvent) return $ parseId firstEvent
-  S.foldlM' (eventHandler myId postMove) "Game State Placeholder" streamTail
+  (idAssignment, eventHistory) <-
+    maybe (throw $ CannotParse initialData) return (A.decode initialData)
+  putStrLn $ formatEventHistory eventHistory
+  let (IdAssignment myId) = idAssignment
+      eventStream = getEventStream streamTail
+  S.foldlM' (eventHandler myId postMove) (eventHistory, "gsp") eventStream
   return ()

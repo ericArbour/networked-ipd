@@ -2,11 +2,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Lib.Shared
-  ( MoveInfo(..)
-  , Move(..)
-  , API
-  ) where
+module Lib.Shared where
 
 import Data.Aeson.Types (FromJSON, ToJSON)
 import GHC.Generics (Generic)
@@ -21,15 +17,40 @@ instance ToJSON Move
 
 instance FromJSON Move
 
-data MoveInfo =
-  MoveInfo
-    { userId :: Int
-    , move :: Move
-    }
+type PlayerId = Int
+
+data PlayerMove =
+  PlayerMove PlayerId Move
+  deriving (Show, Generic)
+
+instance ToJSON PlayerMove
+
+instance FromJSON PlayerMove
+
+data Strategy =
+  Default
   deriving (Eq, Show, Generic)
 
-instance ToJSON MoveInfo
+instance ToJSON Strategy
 
-instance FromJSON MoveInfo
+instance FromJSON Strategy
 
-type API = "move" :> ReqBody '[ JSON] MoveInfo :> Post '[ JSON] NoContent
+data Event
+  = MoveEvent PlayerId Move
+  | JoinEvent PlayerId Strategy
+  | LeaveEvent PlayerId
+  deriving (Show, Generic)
+
+instance ToJSON Event
+
+instance FromJSON Event
+
+data IdAssignment =
+  IdAssignment PlayerId
+  deriving (Show, Generic)
+
+instance ToJSON IdAssignment
+
+instance FromJSON IdAssignment
+
+type API = "move" :> ReqBody '[ JSON] PlayerMove :> Post '[ JSON] NoContent
