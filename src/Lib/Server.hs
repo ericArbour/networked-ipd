@@ -8,7 +8,9 @@ import Control.Concurrent
 import Control.Exception (finally)
 import Control.Monad (forM_, forever)
 import Control.Monad.Trans (liftIO)
+import Data.Maybe (isJust)
 import Network.Wai.Handler.Warp (run)
+import System.Random (randomRIO)
 
 import qualified Data.Aeson as A
 import qualified Data.Text as T
@@ -26,6 +28,11 @@ import Lib.Shared
   , PlayerMove(..)
   , Strategy(..)
   )
+
+-- Helpers
+-------------------------------------------------------------------------------------
+seconds :: Int -> Int
+seconds = (* 1000000)
 
 -- HTTP
 -------------------------------------------------------------------------------------
@@ -60,16 +67,21 @@ data Player =
     , wsConn :: WS.Connection
     }
 
+data Game =
+  Game PlayerId PlayerId
+  deriving (Show)
+
 data ServerState =
   ServerState
     { players :: [Player]
     , pidCounter :: PlayerId
+    , game :: Maybe Game
     , eventHistory :: [Event]
     }
 
 initialServerState :: ServerState
 initialServerState =
-  ServerState {players = [], pidCounter = 1, eventHistory = []}
+  ServerState {players = [], pidCounter = 1, game = Nothing, eventHistory = []}
 
 removePlayer :: Player -> [Player] -> [Player]
 removePlayer player = filter ((/= pid player) . pid)
@@ -84,6 +96,7 @@ broadcastEvent serverStateMVar event = do
       ServerState
         { players = players serverState
         , pidCounter = pidCounter serverState
+        , game = game serverState
         , eventHistory = event : eventHistory serverState
         }
   forM_ players' $ \player -> WS.sendTextData (wsConn player) (A.encode event)
@@ -119,6 +132,7 @@ application serverStateMVar announcementMVar pending = do
                 ( ServerState
                     { players = players'
                     , pidCounter = currentPid + 1
+                    , game = game serverState
                     , eventHistory = eventHistory serverState
                     }
                 , newPlayer)
@@ -137,6 +151,7 @@ application serverStateMVar announcementMVar pending = do
             ServerState
               { players = players'
               , pidCounter = pidCounter serverState
+              , game = game serverState
               , eventHistory = eventHistory serverState
               }
       putMVar announcementMVar $ LeaveEvent (pid newPlayer)
@@ -148,6 +163,45 @@ runWSServer port serverStateMVar = do
     application serverStateMVar announcementMVar
   S.repeatM . liftIO $ takeMVar announcementMVar
 
+gameMaker :: MVar ServerState -> S.SerialT IO Event
+gameMaker serverStateMVar = do
+  newGameMVar <- liftIO newEmptyMVar
+  liftIO . forkIO . forever $ do
+    threadDelay $ seconds 1
+    maybeGame <-
+      modifyMVar serverStateMVar $ \serverState -> do
+        let players' = players serverState
+            playerCount = length players'
+        if playerCount < 2 || isJust (game serverState)
+          then return (serverState, Nothing)
+          else do
+            rn1 <- randomRIO (0, playerCount - 1)
+            rn2 <- randomRIO (0, playerCount - 1)
+            let idx1 = rn1
+                idx2 = getUniqueIdx rn1 rn2
+                p1 = players' !! idx1
+                p2 = players' !! idx2
+                newGame = Game (pid p1) (pid p2)
+            return $
+              ( ServerState
+                  { players = players serverState
+                  , pidCounter = pidCounter serverState
+                  , game = Just newGame
+                  , eventHistory = eventHistory serverState
+                  }
+              , Just newGame)
+    case maybeGame of
+      Just (Game pid1 pid2) -> putMVar newGameMVar $ GameStartEvent pid1 pid2
+      Nothing -> return ()
+  S.repeatM . liftIO $ takeMVar newGameMVar
+  where
+    getUniqueIdx rn1 rn2 =
+      if rn1 /= rn2
+        then rn2
+        else if rn2 == 0
+               then 1
+               else rn2 - 1
+
 -- Main
 --------------------------------------------------------------------------------------
 runServer :: IO ()
@@ -156,7 +210,9 @@ runServer = do
   serverStateMVar <- newMVar initialServerState
   let moveStream = runHTTPServer httpPort
       announcementStream = runWSServer wsPort serverStateMVar
-      eventStream = moveStream `S.parallel` announcementStream
+      gameStream = gameMaker serverStateMVar
+      eventStream =
+        moveStream `S.parallel` announcementStream `S.parallel` gameStream
   putStrLn $ "HTTP server listening on port " <> (show httpPort)
   putStrLn $ "Websocket server listening on port " <> (show wsPort)
   S.runStream $ S.mapM (broadcastEvent serverStateMVar) eventStream

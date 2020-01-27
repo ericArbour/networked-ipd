@@ -39,6 +39,7 @@ data Event
   = MoveEvent PlayerId Move
   | JoinEvent PlayerId Strategy
   | LeaveEvent PlayerId
+  | GameStartEvent PlayerId PlayerId
   deriving (Show, Generic)
 
 instance ToJSON Event

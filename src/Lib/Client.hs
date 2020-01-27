@@ -92,19 +92,15 @@ getEventStream :: S.SerialT IO ByteString -> S.SerialT IO Event
 getEventStream btstrStream = S.mapM decodeOrFail btstrStream
   where
     decodeOrFail :: ByteString -> IO Event
-    decodeOrFail e = maybe (throw $ InvalidEvent e) return (A.decode e)
+    decodeOrFail btstr =
+      maybe (throw $ InvalidEvent btstr) return (A.decode btstr)
 
 -- Game
 -------------------------------------------------------------------------------
-delay :: Int
-delay = 1000000
-
 eventHandler ::
      Int -> SV.Client IO API -> ClientState -> Event -> IO ClientState
 eventHandler myId postMove gameState event = do
   putStrLn (show event)
-  threadDelay delay
-  postMove $ PlayerMove myId Defect
   return gameState
 
 -- Main

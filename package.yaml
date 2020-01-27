@@ -26,6 +26,7 @@ dependencies:
 - http-client
 - mtl
 - network
+- random
 - servant-client
 - servant-server
 - streamly
