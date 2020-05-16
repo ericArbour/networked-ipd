@@ -89,7 +89,7 @@ getWSStream = do
   S.repeatM . liftIO $ takeMVar btstrMVar
 
 getEventStream :: S.SerialT IO ByteString -> S.SerialT IO Event
-getEventStream btstrStream = S.mapM decodeOrFail btstrStream
+getEventStream = S.mapM decodeOrFail
   where
     decodeOrFail :: ByteString -> IO Event
     decodeOrFail btstr =
@@ -100,7 +100,7 @@ getEventStream btstrStream = S.mapM decodeOrFail btstrStream
 eventHandler ::
      Int -> SV.Client IO API -> ClientState -> Event -> IO ClientState
 eventHandler myId postMove gameState event = do
-  putStrLn (show event)
+  print event
   return gameState
 
 -- Main

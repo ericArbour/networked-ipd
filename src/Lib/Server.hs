@@ -90,15 +90,15 @@ broadcastEvent :: MVar ServerState -> Event -> IO ()
 broadcastEvent serverStateMVar event = do
   serverState <- readMVar serverStateMVar
   let players' = players serverState
-  putStrLn $ show event
-  modifyMVar_ serverStateMVar $ \serverState -> do
+  print event
+  modifyMVar_ serverStateMVar $ \serverState ->
     return $
-      ServerState
-        { players = players serverState
-        , pidCounter = pidCounter serverState
-        , game = game serverState
-        , eventHistory = event : eventHistory serverState
-        }
+    ServerState
+      { players = players serverState
+      , pidCounter = pidCounter serverState
+      , game = game serverState
+      , eventHistory = event : eventHistory serverState
+      }
   forM_ players' $ \player -> WS.sendTextData (wsConn player) (A.encode event)
 
 -- Handler for all additional incoming websocket data
@@ -127,22 +127,22 @@ application serverStateMVar announcementMVar pending = do
             let currentPid = pidCounter serverState
                 newPlayer =
                   Player {pid = currentPid, strategy = strategy', wsConn = conn}
-                players' = newPlayer : (players serverState)
-             in return $
-                ( ServerState
-                    { players = players'
-                    , pidCounter = currentPid + 1
-                    , game = game serverState
-                    , eventHistory = eventHistory serverState
-                    }
-                , newPlayer)
+                players' = newPlayer : players serverState
+             in return
+                  ( ServerState
+                      { players = players'
+                      , pidCounter = currentPid + 1
+                      , game = game serverState
+                      , eventHistory = eventHistory serverState
+                      }
+                  , newPlayer)
         let newPid = IdAssignment (pid newPlayer)
         eventHistory <- eventHistory <$> readMVar serverStateMVar
         WS.sendTextData conn $ A.encode (newPid, eventHistory)
         putMVar announcementMVar $
           JoinEvent (pid newPlayer) (strategy newPlayer)
         flip finally (disconnect newPlayer) $ keepConnAlive conn
-      otherwise -> WS.sendTextData conn $ T.pack "Invalid strategy."
+      _ -> WS.sendTextData conn $ T.pack "Invalid strategy."
   where
     disconnect newPlayer = do
       modifyMVar_ serverStateMVar $ \serverState ->
@@ -182,7 +182,7 @@ gameMaker serverStateMVar = do
                 p1 = players' !! idx1
                 p2 = players' !! idx2
                 newGame = Game (pid p1) (pid p2)
-            return $
+            return
               ( ServerState
                   { players = players serverState
                   , pidCounter = pidCounter serverState
@@ -195,12 +195,10 @@ gameMaker serverStateMVar = do
       Nothing -> return ()
   S.repeatM . liftIO $ takeMVar newGameMVar
   where
-    getUniqueIdx rn1 rn2 =
-      if rn1 /= rn2
-        then rn2
-        else if rn2 == 0
-               then 1
-               else rn2 - 1
+    getUniqueIdx rn1 rn2
+      | rn1 /= rn2 = rn2
+      | rn2 == 0 = 1
+      | otherwise = rn2 - 1
 
 -- Main
 --------------------------------------------------------------------------------------
@@ -213,8 +211,8 @@ runServer = do
       gameStream = gameMaker serverStateMVar
       eventStream =
         moveStream `S.parallel` announcementStream `S.parallel` gameStream
-  putStrLn $ "HTTP server listening on port " <> (show httpPort)
-  putStrLn $ "Websocket server listening on port " <> (show wsPort)
+  putStrLn $ "HTTP server listening on port " <> show httpPort
+  putStrLn $ "Websocket server listening on port " <> show wsPort
   S.runStream $ S.mapM (broadcastEvent serverStateMVar) eventStream
   where
     httpPort = 8081

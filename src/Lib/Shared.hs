@@ -46,7 +46,7 @@ instance ToJSON Event
 
 instance FromJSON Event
 
-data IdAssignment =
+newtype IdAssignment =
   IdAssignment PlayerId
   deriving (Show, Generic)
 
