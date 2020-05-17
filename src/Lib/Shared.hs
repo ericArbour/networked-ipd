@@ -36,10 +36,10 @@ instance ToJSON Strategy
 instance FromJSON Strategy
 
 data Event
-  = MoveEvent PlayerId Move
-  | JoinEvent PlayerId Strategy
-  | LeaveEvent PlayerId
-  | GameStartEvent PlayerId PlayerId
+  = Move PlayerId Move
+  | Join PlayerId Strategy
+  | Leave PlayerId
+  | GameStart PlayerId PlayerId
   deriving (Show, Generic)
 
 instance ToJSON Event

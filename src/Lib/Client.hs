@@ -99,9 +99,16 @@ getEventStream = S.mapM decodeOrFail
 -------------------------------------------------------------------------------
 eventHandler ::
      Int -> SV.Client IO API -> ClientState -> Event -> IO ClientState
-eventHandler myId postMove gameState event = do
+eventHandler myId postMove (eventHistory, gsp) event = do
   print event
-  return gameState
+  case event of
+    GameStart id1 id2 ->
+      if id1 == myId || id2 == myId
+        then do
+          postMove $ PlayerMove myId Defect
+          return (event : eventHistory, gsp)
+        else return (event : eventHistory, gsp)
+    _ -> return (event : eventHistory, gsp)
 
 -- Main
 --------------------------------------------------------------------------------
