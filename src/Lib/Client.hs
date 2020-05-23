@@ -27,14 +27,14 @@ import qualified Streamly.Prelude as S
 
 import Lib.Shared
   ( API
-  , Event(..)
   , IdAssignment(..)
   , Move(..)
-  , PlayerMove(..)
+  , MovePost(..)
+  , PublicEvent(..)
   , Strategy(..)
   )
 
-type ClientState = ([Event], String)
+type ClientState = ([PublicEvent], String)
 
 data GameException
   = InvalidStrategy
@@ -47,7 +47,7 @@ instance Exception GameException
 
 -- Helpers
 -------------------------------------------------------------------------------
-formatEventHistory :: [Event] -> String
+formatEventHistory :: [PublicEvent] -> String
 formatEventHistory = foldr (<>) "" . intersperse "\n" . map show . reverse
 
 -- HTTP
@@ -88,24 +88,24 @@ getWSStream = do
     WS.runClient "127.0.0.1" 8082 "/" (wsClient btstrMVar)
   S.repeatM . liftIO $ takeMVar btstrMVar
 
-getEventStream :: S.SerialT IO ByteString -> S.SerialT IO Event
+getEventStream :: S.SerialT IO ByteString -> S.SerialT IO PublicEvent
 getEventStream = S.mapM decodeOrFail
   where
-    decodeOrFail :: ByteString -> IO Event
+    decodeOrFail :: ByteString -> IO PublicEvent
     decodeOrFail btstr =
       maybe (throw $ InvalidEvent btstr) return (A.decode btstr)
 
 -- Game
 -------------------------------------------------------------------------------
 eventHandler ::
-     Int -> SV.Client IO API -> ClientState -> Event -> IO ClientState
+     Int -> SV.Client IO API -> ClientState -> PublicEvent -> IO ClientState
 eventHandler myId postMove (eventHistory, gsp) event = do
   print event
   case event of
-    GameStart id1 id2 ->
+    NewGame id1 id2 ->
       if id1 == myId || id2 == myId
         then do
-          postMove $ PlayerMove myId Defect
+          postMove $ MovePost myId Defect
           return (event : eventHistory, gsp)
         else return (event : eventHistory, gsp)
     _ -> return (event : eventHistory, gsp)

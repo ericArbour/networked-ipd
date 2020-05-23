@@ -6,6 +6,7 @@ module Lib.Shared where
 
 import Data.Aeson.Types (FromJSON, ToJSON)
 import GHC.Generics (Generic)
+import qualified Network.WebSockets as WS
 import Servant
 
 data Move
@@ -19,13 +20,13 @@ instance FromJSON Move
 
 type PlayerId = Int
 
-data PlayerMove =
-  PlayerMove PlayerId Move
+data MovePost =
+  MovePost PlayerId Move
   deriving (Show, Generic)
 
-instance ToJSON PlayerMove
+instance ToJSON MovePost
 
-instance FromJSON PlayerMove
+instance FromJSON MovePost
 
 data Strategy =
   Default
@@ -35,16 +36,19 @@ instance ToJSON Strategy
 
 instance FromJSON Strategy
 
-data Event
-  = Move PlayerId Move
-  | Join PlayerId Strategy
-  | Leave PlayerId
-  | GameStart PlayerId PlayerId
+type Score = Int
+
+data PublicEvent
+  = PlayerJoin PlayerId Strategy
+  | PlayerQuit PlayerId
+  | PlayerMove PlayerId Move
+  | NewGame PlayerId PlayerId
+  | GameResult [(PlayerId, Score)]
   deriving (Show, Generic)
 
-instance ToJSON Event
+instance ToJSON PublicEvent
 
-instance FromJSON Event
+instance FromJSON PublicEvent
 
 newtype IdAssignment =
   IdAssignment PlayerId
@@ -54,4 +58,4 @@ instance ToJSON IdAssignment
 
 instance FromJSON IdAssignment
 
-type API = "move" :> ReqBody '[ JSON] PlayerMove :> Post '[ JSON] NoContent
+type API = "move" :> ReqBody '[ JSON] MovePost :> Post '[ JSON] NoContent
