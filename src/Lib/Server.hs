@@ -322,7 +322,7 @@ runServer = do
   putStrLn $ "HTTP server listening on port " <> show httpPort
   putStrLn $ "Websocket server listening on port " <> show wsPort
   broadcast pubEventMVar serverStateMVar
-  S.runStream .
+  S.drain .
     S.mapM (handleServerEvent serverStateMVar gameMVar pubEventMVar) .
     S.mapM logServerEvent $
     serverEventStream
