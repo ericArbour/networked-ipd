@@ -81,17 +81,8 @@ minScore = -200
 
 gameDuration :: Int
 gameDuration = seconds 1
-
--- Helpers
--------------------------------------------------------------------------------------
-seconds :: Int -> Int
-seconds = (* 1000000)
-
-getUniqueIdx :: Int -> Int -> Int
-getUniqueIdx idx1 idx2
-  | idx1 /= idx2 = idx2
-  | idx2 == 0 = 1
-  | otherwise = idx2 - 1
+  where
+    seconds = (* 1000000)
 
 -- HTTP
 -------------------------------------------------------------------------------------
@@ -270,6 +261,10 @@ handleStartNewGame serverStateMVar = do
               p1 = players' !! idx1
               p2 = players' !! idx2
           return $ Just $ Game (pid p1) (pid p2) Nothing Nothing
+    getUniqueIdx idx1 idx2
+      | idx1 /= idx2 = idx2
+      | idx2 == 0 = 1
+      | otherwise = idx2 - 1
     kickPlayer pid' players' =
       case getPlayer pid' players' of
         (Just player) -> do
