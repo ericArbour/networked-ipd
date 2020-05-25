@@ -54,7 +54,7 @@ data Player =
     }
 
 data Game =
-  Game PlayerId PlayerId (Maybe Move) (Maybe Move)
+  Game PlayerId (Maybe Move) PlayerId (Maybe Move)
   deriving (Show)
 
 data ServerState =
@@ -215,7 +215,7 @@ handleStartNewGame serverStateMVar = do
       let maybeGame = game serverState
           players' = players serverState
       case maybeGame of
-        Just (Game pid1 pid2 m1 m2)
+        Just (Game pid1 m1 pid2 m2)
         -- Handle an incomplete game by kicking players who didn't respond in time
          -> do
           players'' <-
@@ -224,7 +224,7 @@ handleStartNewGame serverStateMVar = do
               else return players'
           players''' <-
             if isNothing m2
-              then kickPlayer pid1 players''
+              then kickPlayer pid2 players''
               else return players''
           maybeGame <- makeNewGame players'''
           return
@@ -244,7 +244,7 @@ handleStartNewGame serverStateMVar = do
                 }
             , maybeGame)
   case maybeNewGame of
-    Just (Game pid1 pid2 _ _) -> return $ Just $ NewGame pid1 pid2
+    Just (Game pid1 _ pid2 _) -> return $ Just $ NewGame pid1 pid2
     Nothing -> return Nothing
   where
     makeNewGame players' = do
@@ -258,7 +258,7 @@ handleStartNewGame serverStateMVar = do
               idx2 = getUniqueIdx rn1 rn2
               p1 = players' !! idx1
               p2 = players' !! idx2
-          return $ Just $ Game (pid p1) (pid p2) Nothing Nothing
+          return $ Just $ Game (pid p1) Nothing (pid p2) Nothing
     getUniqueIdx idx1 idx2
       | idx1 /= idx2 = idx2
       | idx2 == 0 = 1
@@ -297,7 +297,7 @@ handleServerEvent serverStateMVar event =
               case maybeGame of
                 Nothing -> maybeGame
                 -- Remove game if quitting player was in it
-                Just (Game pid1 pid2 _ _) ->
+                Just (Game pid1 _ pid2 _) ->
                   if pid' == pid1 || pid' == pid2
                     then Nothing
                     else maybeGame
@@ -315,9 +315,9 @@ handleServerEvent serverStateMVar event =
           let maybeGame = game serverState
           case maybeGame of
             Nothing -> return (serverState, Nothing)
-            Just (Game pid1 pid2 maybeP1Move maybeP2Move)
+            Just (Game pid1 maybeP1Move pid2 maybeP2Move)
               | pid == pid1 && isNothing maybeP1Move -> do
-                let game' = Just $ Game pid1 pid2 (Just move) maybeP2Move
+                let game' = Just $ Game pid1 (Just move) pid2 maybeP2Move
                 return
                   ( ServerState
                       { players = players serverState
@@ -326,7 +326,7 @@ handleServerEvent serverStateMVar event =
                       }
                   , game')
               | pid == pid2 && isNothing maybeP2Move -> do
-                let game' = Just $ Game pid1 pid2 maybeP1Move (Just move)
+                let game' = Just $ Game pid1 maybeP1Move pid2 (Just move)
                 return
                   ( ServerState
                       { players = players serverState
@@ -336,7 +336,7 @@ handleServerEvent serverStateMVar event =
                   , game')
               | otherwise -> return (serverState, game serverState)
       case maybeGame of
-        Just (Game pid1 pid2 (Just p1Move) (Just p2Move)) -> do
+        Just (Game pid1 (Just p1Move) pid2 (Just p2Move)) -> do
           let (p1Score, p2Score) = scoreGame p1Move p2Move
           players' <-
             modifyMVar serverStateMVar $ \serverState -> do

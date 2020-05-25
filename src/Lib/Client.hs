@@ -6,11 +6,11 @@ module Lib.Client
 
 import Control.Concurrent
 import Control.Exception (Exception, finally, throw)
-import Control.Monad (forever, when)
+import Control.Monad (forever)
 import Control.Monad.Trans (liftIO)
 import Data.ByteString.Lazy (ByteString)
 import Data.List (intersperse)
-import Data.Maybe (fromJust, maybe)
+import Data.Maybe (maybe)
 import Data.Proxy (Proxy(..))
 import Data.Typeable (Typeable)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
@@ -18,6 +18,7 @@ import Network.Socket (withSocketsDo)
 import Text.Read (readMaybe)
 
 import qualified Data.Aeson as A
+import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Network.WebSockets as WS
@@ -30,11 +31,15 @@ import Lib.Shared
   , IdAssignment(..)
   , Move(..)
   , MovePost(..)
+  , PlayerId
   , PublicEvent(..)
   , Strategy(..)
   )
 
-type ClientState = ([PublicEvent], String)
+data MoveAgainst =
+  MoveAgainst Move PlayerId
+
+type MoveMap = M.Map PlayerId [MoveAgainst]
 
 data GameException
   = InvalidStrategy
@@ -67,6 +72,13 @@ hoistHTTPClient manager' =
     handleError :: IO (Either SV.ClientError a) -> IO a
     handleError = fmap (either (error . show) id)
 
+movePoster :: MVar MovePost -> IO ()
+movePoster movePostMVar = do
+  manager' <- newManager defaultManagerSettings
+  let postMove = hoistHTTPClient manager'
+  forkIO . forever $ takeMVar movePostMVar >>= postMove
+  return ()
+
 -- Websockets
 --------------------------------------------------------------------------------
 wsClient :: MVar ByteString -> WS.ClientApp ()
@@ -94,17 +106,20 @@ decodeOrFail btstr = maybe (throw $ InvalidEvent btstr) return (A.decode btstr)
 -- Game
 -------------------------------------------------------------------------------
 eventHandler ::
-     Int -> SV.Client IO API -> ClientState -> PublicEvent -> IO ClientState
-eventHandler myId postMove (eventHistory, gsp) event = do
+     PlayerId -> MVar MovePost -> MoveMap -> PublicEvent -> IO MoveMap
+eventHandler myId movePostMVar moveMap event = do
   print event
   case event of
     NewGame id1 id2 ->
       if id1 == myId || id2 == myId
         then do
-          postMove $ MovePost myId Defect
-          return (event : eventHistory, gsp)
-        else return (event : eventHistory, gsp)
-    _ -> return (event : eventHistory, gsp)
+          putMVar movePostMVar $ MovePost myId Defect
+          return moveMap
+        else return moveMap
+    _ -> return moveMap
+
+getMoveMap :: [PublicEvent] -> MoveMap
+getMoveMap publicEvents = M.empty
 
 -- Main
 --------------------------------------------------------------------------------
@@ -116,10 +131,10 @@ runClient = do
   (idAssignment, eventHistory) <-
     maybe (throw $ CannotParse initialData) return (A.decode initialData)
   putStrLn $ formatEventHistory eventHistory
-  manager' <- newManager defaultManagerSettings
-  let postMove = hoistHTTPClient manager'
-      (IdAssignment myId) = idAssignment
-  S.foldlM' (eventHandler myId postMove) (eventHistory, "gsp") .
-    S.mapM decodeOrFail $
+  movePostMVar <- newEmptyMVar
+  let (IdAssignment myId) = idAssignment
+      moveMap = getMoveMap eventHistory
+  movePoster movePostMVar
+  S.foldlM' (eventHandler myId movePostMVar) moveMap . S.mapM decodeOrFail $
     streamTail
   return ()
