@@ -40,9 +40,8 @@ type Score = Int
 
 data PublicEvent
   = PlayerJoin PlayerId Strategy
-  | PlayerQuit PlayerId
-  | PlayerMove PlayerId Move
   | NewGame PlayerId PlayerId
+  | PlayerMove PlayerId Move
   deriving (Show, Generic)
 
 instance ToJSON PublicEvent

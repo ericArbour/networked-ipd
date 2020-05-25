@@ -309,7 +309,7 @@ handleServerEvent serverStateMVar event =
               , eventHistory = eventHistory serverState
               , game = game'
               }
-      return [PlayerQuit pid']
+      return []
     StartNewGame -> handleStartNewGame serverStateMVar
     GameMove pid move -> do
       maybeGame <-
