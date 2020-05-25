@@ -136,7 +136,10 @@ application uuidMVar announcementMVar pending = do
   where
     disconnect pid' = putMVar announcementMVar $ Quit pid'
     -- Ignore all additional websocket messages from client
-    keepConnAlive conn = forever $ do WS.receiveData conn :: IO T.Text
+    keepConnAlive conn =
+      forever $ do
+        WS.receiveData conn :: IO T.Text
+        return ()
 
 runWSServer :: Int -> S.SerialT IO ServerEvent
 runWSServer port = do
@@ -147,7 +150,7 @@ runWSServer port = do
   S.repeatM . liftIO $ takeMVar announcementMVar
 
 broadcast :: MVar ServerState -> [PublicEvent] -> IO ()
-broadcast serverStateMVar events = do
+broadcast serverStateMVar events =
   forM_ events $ \event ->
     modifyMVar_ serverStateMVar $ \serverState -> do
       let players' = players serverState
@@ -171,7 +174,7 @@ removePlayer :: PlayerId -> [Player] -> [Player]
 removePlayer pid' = filter ((/= pid') . pid)
 
 getPlayer :: PlayerId -> [Player] -> Maybe Player
-getPlayer targetPid = find (\p -> (pid p) == targetPid)
+getPlayer targetPid = find (\p -> pid p == targetPid)
 
 updatePlayerScore :: PlayerId -> Int -> [Player] -> [Player]
 updatePlayerScore targetPid val ps =
@@ -227,11 +230,11 @@ handleStartNewGame serverStateMVar = do
         -- Handle an incomplete game by kicking players who didn't respond in time
          -> do
           players'' <-
-            if m1 == Nothing
+            if isNothing m1
               then kickPlayer pid1 players'
               else return players'
           players''' <-
-            if m2 == Nothing
+            if isNothing m2
               then kickPlayer pid1 players''
               else return players''
           maybeGame <- makeNewGame players'''
@@ -267,16 +270,16 @@ handleStartNewGame serverStateMVar = do
               p1 = players' !! idx1
               p2 = players' !! idx2
           return $ Just $ Game (pid p1) (pid p2) Nothing Nothing
-    kickPlayer pid' players' = do
+    kickPlayer pid' players' =
       case getPlayer pid' players' of
         (Just player) -> do
           WS.sendClose (wsConn player) $
-            (T.pack "You took too long to make a move, goodbye!")
+            T.pack "You took too long to make a move, goodbye!"
           return $ removePlayer pid' players'
         Nothing -> return players'
 
 handleServerEvent :: MVar ServerState -> ServerEvent -> IO [PublicEvent]
-handleServerEvent serverStateMVar event = do
+handleServerEvent serverStateMVar event =
   case event of
     Join pid' wsConn' strategy' -> do
       modifyMVar_ serverStateMVar $ \serverState -> do
