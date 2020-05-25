@@ -43,7 +43,6 @@ data PublicEvent
   | PlayerQuit PlayerId
   | PlayerMove PlayerId Move
   | NewGame PlayerId PlayerId
-  | GameResult [(PlayerId, Score)]
   deriving (Show, Generic)
 
 instance ToJSON PublicEvent
