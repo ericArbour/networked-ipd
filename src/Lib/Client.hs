@@ -88,12 +88,8 @@ getWSStream = do
     WS.runClient "127.0.0.1" 8082 "/" (wsClient btstrMVar)
   S.repeatM . liftIO $ takeMVar btstrMVar
 
-getEventStream :: S.SerialT IO ByteString -> S.SerialT IO PublicEvent
-getEventStream = S.mapM decodeOrFail
-  where
-    decodeOrFail :: ByteString -> IO PublicEvent
-    decodeOrFail btstr =
-      maybe (throw $ InvalidEvent btstr) return (A.decode btstr)
+decodeOrFail :: ByteString -> IO PublicEvent
+decodeOrFail btstr = maybe (throw $ InvalidEvent btstr) return (A.decode btstr)
 
 -- Game
 -------------------------------------------------------------------------------
@@ -114,15 +110,16 @@ eventHandler myId postMove (eventHistory, gsp) event = do
 --------------------------------------------------------------------------------
 runClient :: IO ()
 runClient = do
-  manager' <- newManager defaultManagerSettings
-  let postMove = hoistHTTPClient manager'
   maybeDecompStream <- S.uncons getWSStream
   (initialData, streamTail) <-
     maybe (throw NoStreamFound) return maybeDecompStream
   (idAssignment, eventHistory) <-
     maybe (throw $ CannotParse initialData) return (A.decode initialData)
   putStrLn $ formatEventHistory eventHistory
-  let (IdAssignment myId) = idAssignment
-      eventStream = getEventStream streamTail
-  S.foldlM' (eventHandler myId postMove) (eventHistory, "gsp") eventStream
+  manager' <- newManager defaultManagerSettings
+  let postMove = hoistHTTPClient manager'
+      (IdAssignment myId) = idAssignment
+  S.foldlM' (eventHandler myId postMove) (eventHistory, "gsp") .
+    S.mapM decodeOrFail $
+    streamTail
   return ()

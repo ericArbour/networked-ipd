@@ -140,20 +140,18 @@ runWSServer port = do
     application uuidMVar announcementMVar
   S.repeatM . liftIO $ takeMVar announcementMVar
 
-broadcast :: MVar ServerState -> [PublicEvent] -> IO ()
-broadcast serverStateMVar events =
-  forM_ events $ \event ->
-    modifyMVar_ serverStateMVar $ \serverState -> do
-      let players' = players serverState
-          serverState' =
-            ServerState
-              { players = players'
-              , eventHistory = event : eventHistory serverState
-              , game = game serverState
-              }
-      forM_ players' $ \player ->
-        WS.sendTextData (wsConn player) (A.encode event)
-      return serverState'
+broadcast :: MVar ServerState -> PublicEvent -> IO ()
+broadcast serverStateMVar event =
+  modifyMVar_ serverStateMVar $ \serverState -> do
+    let players' = players serverState
+        serverState' =
+          ServerState
+            { players = players'
+            , eventHistory = event : eventHistory serverState
+            , game = game serverState
+            }
+    forM_ players' $ \player -> WS.sendTextData (wsConn player) (A.encode event)
+    return serverState'
 
 -- Game
 --------------------------------------------------------------------------------------
@@ -210,7 +208,7 @@ gameStartStream = do
     putMVar startNewGameMVar StartNewGame
   S.repeatM . liftIO $ takeMVar startNewGameMVar
 
-handleStartNewGame :: MVar ServerState -> IO [PublicEvent]
+handleStartNewGame :: MVar ServerState -> IO (Maybe PublicEvent)
 handleStartNewGame serverStateMVar = do
   maybeNewGame <-
     modifyMVar serverStateMVar $ \serverState -> do
@@ -246,8 +244,8 @@ handleStartNewGame serverStateMVar = do
                 }
             , maybeGame)
   case maybeNewGame of
-    Just (Game pid1 pid2 _ _) -> return [NewGame pid1 pid2]
-    Nothing -> return []
+    Just (Game pid1 pid2 _ _) -> return $ Just $ NewGame pid1 pid2
+    Nothing -> return Nothing
   where
     makeNewGame players' = do
       let playerCount = length players'
@@ -273,7 +271,7 @@ handleStartNewGame serverStateMVar = do
           return $ removePlayer pid' players'
         Nothing -> return players'
 
-handleServerEvent :: MVar ServerState -> ServerEvent -> IO [PublicEvent]
+handleServerEvent :: MVar ServerState -> ServerEvent -> IO (Maybe PublicEvent)
 handleServerEvent serverStateMVar event =
   case event of
     Join pid' wsConn' strategy' -> do
@@ -290,7 +288,7 @@ handleServerEvent serverStateMVar event =
             , eventHistory = eventHistory serverState
             , game = game serverState
             }
-      return [PlayerJoin pid' strategy']
+      return $ Just $ PlayerJoin pid' strategy'
     Quit pid' -> do
       modifyMVar_ serverStateMVar $ \serverState ->
         let players' = removePlayer pid' (players serverState)
@@ -309,7 +307,7 @@ handleServerEvent serverStateMVar event =
               , eventHistory = eventHistory serverState
               , game = game'
               }
-      return []
+      return Nothing
     StartNewGame -> handleStartNewGame serverStateMVar
     GameMove pid move -> do
       maybeGame <-
@@ -359,8 +357,8 @@ handleServerEvent serverStateMVar event =
           putStrLn "--------------"
           putStrLn $ formatPlayerScores playerScores
           putStrLn "--------------"
-          return [PlayerMove pid1 p1Move, PlayerMove pid2 p2Move]
-        _ -> return []
+          return $ Just $ GameResult pid1 p1Move pid2 p2Move
+        _ -> return Nothing
 
 -- Main
 --------------------------------------------------------------------------------------
@@ -376,7 +374,7 @@ runServer = do
   putStrLn $ "Websocket server listening on port " <> show wsPort
   S.drain .
     S.mapM (broadcast serverStateMVar) .
-    S.mapM (handleServerEvent serverStateMVar) . S.mapM logServerEvent $
+    S.mapMaybeM (handleServerEvent serverStateMVar) . S.mapM logServerEvent $
     serverEventStream
   where
     httpPort = 8081
