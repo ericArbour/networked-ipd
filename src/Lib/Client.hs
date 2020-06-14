@@ -111,21 +111,24 @@ eventHandler ::
 eventHandler myId myMovesMVar moveMap event = do
   print event
   case event of
-    NewGame id1 id2 ->
-      if id1 == myId || id2 == myId
-        then do
-          putMVar myMovesMVar $ PlayerMove myId Defect
-          print moveMap
-          return moveMap
-        else return moveMap
-    GameResult _ _ _ _ -> return $ insertGameResult event moveMap
+    NewGame pid1 pid2
+      | pid1 == myId -> do
+        let myMove = getMove moveMap pid2
+        putMVar myMovesMVar $ PlayerMove myId myMove
+        return moveMap
+      | pid2 == myId -> do
+        let myMove = getMove moveMap pid1
+        putMVar myMovesMVar $ PlayerMove myId myMove
+        return moveMap
+      | otherwise -> return moveMap
+    GameResult _ _ _ _ -> return $ insertMoveAgainsts event moveMap
     _ -> return moveMap
 
 getInitialMoveMap :: [PublicEvent] -> MoveMap
-getInitialMoveMap = foldr insertGameResult M.empty
+getInitialMoveMap = foldr insertMoveAgainsts M.empty
 
-insertGameResult :: PublicEvent -> MoveMap -> MoveMap
-insertGameResult pe moveMap =
+insertMoveAgainsts :: PublicEvent -> MoveMap -> MoveMap
+insertMoveAgainsts pe moveMap =
   case pe of
     GameResult pid1 p1move pid2 p2move ->
       insertMoveAgainst pid2 pid1 p2move $
@@ -140,6 +143,10 @@ insertGameResult pe moveMap =
             movePid
             ((MoveAgainst againstPid move) : moveAgainsts)
             moveMap
+
+getMove :: MoveMap -> PlayerId -> Move
+-- Todo: implement strategies
+getMove moveMap opponent = Defect
 
 -- Main
 --------------------------------------------------------------------------------
