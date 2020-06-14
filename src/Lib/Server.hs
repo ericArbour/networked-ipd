@@ -26,8 +26,8 @@ import Lib.Shared
   ( API
   , IdAssignment(..)
   , Move(..)
-  , MovePost(..)
   , PlayerId
+  , PlayerMove(..)
   , PublicEvent(..)
   , Score
   , Strategy(..)
@@ -86,27 +86,27 @@ gameDuration = seconds 1
 
 -- HTTP
 -------------------------------------------------------------------------------------
-server :: MVar MovePost -> SV.Server API
-server moveMVar = postMove
+server :: MVar PlayerMove -> SV.Server API
+server moveMVar = handlePostedMove
   where
-    postMove :: MovePost -> SV.Handler SV.NoContent
-    postMove movePost = do
-      liftIO $ putMVar moveMVar movePost
+    handlePostedMove :: PlayerMove -> SV.Handler SV.NoContent
+    handlePostedMove playerMove = do
+      liftIO $ putMVar moveMVar playerMove
       return SV.NoContent
 
 api :: SV.Proxy API
 api = SV.Proxy
 
-app :: MVar MovePost -> SV.Application
+app :: MVar PlayerMove -> SV.Application
 app moveMVar = SV.serve api (server moveMVar)
 
 runHTTPServer :: Int -> S.SerialT IO ServerEvent
 runHTTPServer port = do
   moveMVar <- liftIO newEmptyMVar
   liftIO . forkIO $ run port (app moveMVar)
-  S.map movePostToEvent . S.repeatM . liftIO $ takeMVar moveMVar
+  S.map playerMoveToEvent . S.repeatM . liftIO $ takeMVar moveMVar
   where
-    movePostToEvent (MovePost pid m) = GameMove pid m
+    playerMoveToEvent (PlayerMove pid m) = GameMove pid m
 
 -- WebSockets
 --------------------------------------------------------------------------------------
@@ -372,8 +372,7 @@ runServer = do
         moveStream `S.parallel` announcementStream `S.parallel` gameStartStream
   putStrLn $ "HTTP server listening on port " <> show httpPort
   putStrLn $ "Websocket server listening on port " <> show wsPort
-  S.drain .
-    S.mapM (broadcast serverStateMVar) .
+  S.mapM_ (broadcast serverStateMVar) .
     S.mapMaybeM (handleServerEvent serverStateMVar) . S.mapM logServerEvent $
     serverEventStream
   where

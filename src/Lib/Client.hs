@@ -30,14 +30,15 @@ import Lib.Shared
   ( API
   , IdAssignment(..)
   , Move(..)
-  , MovePost(..)
   , PlayerId
+  , PlayerMove(..)
   , PublicEvent(..)
   , Strategy(..)
   )
 
 data MoveAgainst =
-  MoveAgainst Move PlayerId
+  MoveAgainst PlayerId Move
+  deriving (Show)
 
 type MoveMap = M.Map PlayerId [MoveAgainst]
 
@@ -72,11 +73,11 @@ hoistHTTPClient manager' =
     handleError :: IO (Either SV.ClientError a) -> IO a
     handleError = fmap (either (error . show) id)
 
-movePoster :: MVar MovePost -> IO ()
-movePoster movePostMVar = do
+postMoves :: MVar PlayerMove -> IO ()
+postMoves myMovesMVar = do
   manager' <- newManager defaultManagerSettings
   let postMove = hoistHTTPClient manager'
-  forkIO . forever $ takeMVar movePostMVar >>= postMove
+  forkIO . forever $ takeMVar myMovesMVar >>= postMove
   return ()
 
 -- Websockets
@@ -106,20 +107,39 @@ decodeOrFail btstr = maybe (throw $ InvalidEvent btstr) return (A.decode btstr)
 -- Game
 -------------------------------------------------------------------------------
 eventHandler ::
-     PlayerId -> MVar MovePost -> MoveMap -> PublicEvent -> IO MoveMap
-eventHandler myId movePostMVar moveMap event = do
+     PlayerId -> MVar PlayerMove -> MoveMap -> PublicEvent -> IO MoveMap
+eventHandler myId myMovesMVar moveMap event = do
   print event
   case event of
     NewGame id1 id2 ->
       if id1 == myId || id2 == myId
         then do
-          putMVar movePostMVar $ MovePost myId Defect
+          putMVar myMovesMVar $ PlayerMove myId Defect
+          print moveMap
           return moveMap
         else return moveMap
+    GameResult _ _ _ _ -> return $ insertGameResult event moveMap
     _ -> return moveMap
 
-getMoveMap :: [PublicEvent] -> MoveMap
-getMoveMap publicEvents = M.empty
+getInitialMoveMap :: [PublicEvent] -> MoveMap
+getInitialMoveMap = foldr insertGameResult M.empty
+
+insertGameResult :: PublicEvent -> MoveMap -> MoveMap
+insertGameResult pe moveMap =
+  case pe of
+    GameResult pid1 p1move pid2 p2move ->
+      insertMoveAgainst pid2 pid1 p2move $
+      insertMoveAgainst pid1 pid2 p1move moveMap
+    _ -> moveMap
+  where
+    insertMoveAgainst movePid againstPid move moveMap =
+      case M.lookup movePid moveMap of
+        Nothing -> M.insert movePid [MoveAgainst againstPid move] moveMap
+        Just moveAgainsts ->
+          M.insert
+            movePid
+            ((MoveAgainst againstPid move) : moveAgainsts)
+            moveMap
 
 -- Main
 --------------------------------------------------------------------------------
@@ -131,10 +151,11 @@ runClient = do
   (idAssignment, eventHistory) <-
     maybe (throw $ CannotParse initialData) return (A.decode initialData)
   putStrLn $ formatEventHistory eventHistory
-  movePostMVar <- newEmptyMVar
+  myMovesMVar <- newEmptyMVar
   let (IdAssignment myId) = idAssignment
-      moveMap = getMoveMap eventHistory
-  movePoster movePostMVar
-  S.foldlM' (eventHandler myId movePostMVar) moveMap . S.mapM decodeOrFail $
+      moveMap = getInitialMoveMap eventHistory
+  print moveMap
+  postMoves myMovesMVar
+  S.foldlM' (eventHandler myId myMovesMVar) moveMap . S.mapM decodeOrFail $
     streamTail
   return ()

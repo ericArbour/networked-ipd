@@ -89,3 +89,8 @@ Create a function which accepts a stream of moves and POSTs them to the server i
     b. If you don’t need to move right now, then GHC.Conc.retry (That will bring you back to the start of the atomic computation, where you’ll read the event history TVar again, but by the semantics of atomic computations, you won’t move on to the next step until the value of the event history TVar changes).
 
 Create a function for each strategy that takes an event history and returns a move.
+
+Notes on race conditions:
+- MVar deadlock-free heuristic: Does the number of takes equals the number of puts?
+- Questions:
+    1. MVar counter usage? Need mvar to coordinate between parallel (is it?) ws application functions? Safe because of modify?

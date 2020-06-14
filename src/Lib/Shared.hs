@@ -20,13 +20,13 @@ instance FromJSON Move
 
 type PlayerId = Int
 
-data MovePost =
-  MovePost PlayerId Move
+data PlayerMove =
+  PlayerMove PlayerId Move
   deriving (Show, Generic)
 
-instance ToJSON MovePost
+instance ToJSON PlayerMove
 
-instance FromJSON MovePost
+instance FromJSON PlayerMove
 
 data Strategy =
   Default
@@ -56,4 +56,4 @@ instance ToJSON IdAssignment
 
 instance FromJSON IdAssignment
 
-type API = "move" :> ReqBody '[ JSON] MovePost :> Post '[ JSON] NoContent
+type API = "move" :> ReqBody '[ JSON] PlayerMove :> Post '[ JSON] NoContent
