@@ -30,6 +30,7 @@ dependencies:
 - random
 - servant-client
 - servant-server
+- stm
 - streamly
 - text
 - warp

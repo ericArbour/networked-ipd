@@ -6,6 +6,7 @@ module Lib.Server
 
 -- Todo: spin up clients at start up based on configuration
 import Control.Concurrent
+import Control.Concurrent.STM
 import Control.Exception (finally)
 import Control.Monad (forM_, forever)
 import Control.Monad.Trans (liftIO)
@@ -36,7 +37,7 @@ import Lib.Shared
 -- Types
 -- ----------------------------------------------------------------------------------
 instance Show WS.Connection where
-  show x = "wsConn"
+  show = const "wsConn"
 
 data ServerEvent
   = Join PlayerId WS.Connection Strategy
@@ -111,8 +112,8 @@ runHTTPServer port = do
 -- WebSockets
 --------------------------------------------------------------------------------------
 -- Handle incoming websocket connection requests
-application :: MVar Int -> MVar ServerEvent -> WS.PendingConnection -> IO ()
-application uuidMVar announcementMVar pending = do
+application :: TVar Int -> MVar ServerEvent -> WS.PendingConnection -> IO ()
+application pidCounterTVar announcementMVar pending = do
   conn <- WS.acceptRequest pending
   WS.withPingThread conn 30 (return ()) $
     -- Process initial announcement
@@ -120,11 +121,15 @@ application uuidMVar announcementMVar pending = do
     btstr <- WS.receiveData conn
     case A.decode btstr of
       (Just strategy') -> do
-        pid' <- modifyMVar uuidMVar $ \uuid -> return (uuid + 1, uuid + 1)
+        pid' <- atomically $ incrementCounter pidCounterTVar
         putMVar announcementMVar $ Join pid' conn strategy'
         flip finally (disconnect pid') $ keepConnAlive conn
       _ -> WS.sendTextData conn $ T.pack "Invalid strategy."
   where
+    incrementCounter pidCounterTVar = do
+      nextPid <- readTVar pidCounterTVar >>= \prevId -> return (prevId + 1)
+      writeTVar pidCounterTVar nextPid
+      return nextPid
     disconnect pid' = putMVar announcementMVar $ Quit pid'
     -- Ignore all additional websocket messages from client
     keepConnAlive conn =
@@ -135,9 +140,9 @@ application uuidMVar announcementMVar pending = do
 runWSServer :: Int -> S.SerialT IO ServerEvent
 runWSServer port = do
   announcementMVar <- liftIO newEmptyMVar
-  uuidMVar <- liftIO $ newMVar 0
+  pidCounterTVar <- liftIO $ newTVarIO 0
   liftIO . forkIO . WS.runServer "127.0.0.1" port $
-    application uuidMVar announcementMVar
+    application pidCounterTVar announcementMVar
   S.repeatM . liftIO $ takeMVar announcementMVar
 
 broadcast :: MVar ([Player], PublicEvent) -> IO ()
