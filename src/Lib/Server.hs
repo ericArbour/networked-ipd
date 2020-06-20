@@ -140,18 +140,13 @@ runWSServer port = do
     application uuidMVar announcementMVar
   S.repeatM . liftIO $ takeMVar announcementMVar
 
-broadcast :: MVar ServerState -> PublicEvent -> IO ()
-broadcast serverStateMVar event =
-  modifyMVar_ serverStateMVar $ \serverState -> do
-    let players' = players serverState
-        serverState' =
-          ServerState
-            { players = players'
-            , eventHistory = event : eventHistory serverState
-            , game = game serverState
-            }
-    forM_ players' $ \player -> WS.sendTextData (wsConn player) (A.encode event)
-    return serverState'
+broadcast :: MVar ([Player], PublicEvent) -> IO ()
+broadcast publicEventMVar = do
+  forkIO . forever $ do
+    (players', publicEvent) <- takeMVar publicEventMVar
+    forM_ players' $ \player ->
+      WS.sendTextData (wsConn player) (A.encode publicEvent)
+  return ()
 
 -- Game
 --------------------------------------------------------------------------------------
@@ -208,44 +203,46 @@ gameStartStream = do
     putMVar startNewGameMVar StartNewGame
   S.repeatM . liftIO $ takeMVar startNewGameMVar
 
-handleStartNewGame :: MVar ServerState -> IO (Maybe PublicEvent)
-handleStartNewGame serverStateMVar = do
-  maybeNewGame <-
-    modifyMVar serverStateMVar $ \serverState -> do
-      let maybeGame = game serverState
-          players' = players serverState
-      case maybeGame of
-        Just (Game pid1 m1 pid2 m2)
-        -- Handle an incomplete game by kicking players who didn't respond in time
-         -> do
-          players'' <-
-            if isNothing m1
-              then kickPlayer pid1 players'
-              else return players'
-          players''' <-
-            if isNothing m2
-              then kickPlayer pid2 players''
-              else return players''
-          maybeGame <- makeNewGame players'''
-          return
-            ( ServerState
-                { players = players'''
-                , eventHistory = eventHistory serverState
-                , game = maybeGame
-                }
-            , maybeGame)
-        Nothing -> do
-          maybeGame <- makeNewGame players'
-          return
-            ( ServerState
-                { players = players'
-                , eventHistory = eventHistory serverState
-                , game = maybeGame
-                }
-            , maybeGame)
+handleStartNewGame ::
+     MVar ([Player], PublicEvent) -> ServerState -> IO ServerState
+handleStartNewGame publicEventMVar serverState = do
+  let maybeGame = game serverState
+      players' = players serverState
+  (maybeNewGame, updatedPlayers) <-
+    case maybeGame of
+      Just (Game pid1 m1 pid2 m2)
+    -- Handle an incomplete game by kicking players who didn't respond in time
+       -> do
+        players'' <-
+          if isNothing m1
+            then kickPlayer pid1 players'
+            else return players'
+        players''' <-
+          if isNothing m2
+            then kickPlayer pid2 players''
+            else return players''
+        maybeGame <- makeNewGame players'''
+        return (maybeGame, players''')
+      Nothing -> do
+        maybeGame <- makeNewGame players'
+        return (maybeGame, players')
   case maybeNewGame of
-    Just (Game pid1 _ pid2 _) -> return $ Just $ NewGame pid1 pid2
-    Nothing -> return Nothing
+    Just (Game pid1 _ pid2 _) -> do
+      let newGameEvent = NewGame pid1 pid2
+      putMVar publicEventMVar (updatedPlayers, newGameEvent)
+      return $
+        ServerState
+          { players = updatedPlayers
+          , eventHistory = newGameEvent : eventHistory serverState
+          , game = maybeNewGame
+          }
+    Nothing ->
+      return $
+      ServerState
+        { players = updatedPlayers
+        , eventHistory = eventHistory serverState
+        , game = maybeNewGame
+        }
   where
     makeNewGame players' = do
       let playerCount = length players'
@@ -271,110 +268,102 @@ handleStartNewGame serverStateMVar = do
           return $ removePlayer pid' players'
         Nothing -> return players'
 
-handleServerEvent :: MVar ServerState -> ServerEvent -> IO (Maybe PublicEvent)
-handleServerEvent serverStateMVar event =
+handleServerEvent ::
+     MVar ([Player], PublicEvent)
+  -> ServerState
+  -> ServerEvent
+  -> IO ServerState
+handleServerEvent publicEventMVar serverState event =
   case event of
     Join pid' wsConn' strategy' -> do
-      modifyMVar_ serverStateMVar $ \serverState -> do
-        let newPlayer =
-              Player
-                {pid = pid', wsConn = wsConn', strategy = strategy', score = 0}
-            players' = newPlayer : players serverState
-            eventHistory' = eventHistory serverState
-        WS.sendTextData wsConn' $ A.encode (IdAssignment pid', eventHistory')
-        return $
+      let newPlayer =
+            Player
+              {pid = pid', wsConn = wsConn', strategy = strategy', score = 0}
+          players' = newPlayer : players serverState
+          eventHistory' = eventHistory serverState
+          joinEvent = PlayerJoin pid' strategy'
+      WS.sendTextData wsConn' $ A.encode (IdAssignment pid', eventHistory')
+      putMVar publicEventMVar (players', joinEvent)
+      return $
+        ServerState
+          { players = players'
+          , eventHistory = joinEvent : eventHistory'
+          , game = game serverState
+          }
+    Quit pid' ->
+      let players' = removePlayer pid' (players serverState)
+          maybeGame = game serverState
+          game' =
+            case maybeGame of
+              Nothing -> maybeGame
+              -- Remove game if quitting player was in it
+              Just (Game pid1 _ pid2 _) ->
+                if pid' == pid1 || pid' == pid2
+                  then Nothing
+                  else maybeGame
+       in return $
           ServerState
             { players = players'
             , eventHistory = eventHistory serverState
-            , game = game serverState
+            , game = game'
             }
-      return $ Just $ PlayerJoin pid' strategy'
-    Quit pid' -> do
-      modifyMVar_ serverStateMVar $ \serverState ->
-        let players' = removePlayer pid' (players serverState)
-            maybeGame = game serverState
-            game' =
-              case maybeGame of
-                Nothing -> maybeGame
-                -- Remove game if quitting player was in it
-                Just (Game pid1 _ pid2 _) ->
-                  if pid' == pid1 || pid' == pid2
-                    then Nothing
-                    else maybeGame
-         in return $
-            ServerState
-              { players = players'
-              , eventHistory = eventHistory serverState
-              , game = game'
-              }
-      return Nothing
-    StartNewGame -> handleStartNewGame serverStateMVar
+    StartNewGame -> handleStartNewGame publicEventMVar serverState
     GameMove pid move -> do
-      maybeGame <-
-        modifyMVar serverStateMVar $ \serverState -> do
-          let maybeGame = game serverState
-          case maybeGame of
-            Nothing -> return (serverState, Nothing)
-            Just (Game pid1 maybeP1Move pid2 maybeP2Move)
-              | pid == pid1 && isNothing maybeP1Move -> do
-                let game' = Just $ Game pid1 (Just move) pid2 maybeP2Move
-                return
-                  ( ServerState
-                      { players = players serverState
-                      , eventHistory = eventHistory serverState
-                      , game = game'
-                      }
-                  , game')
-              | pid == pid2 && isNothing maybeP2Move -> do
-                let game' = Just $ Game pid1 maybeP1Move pid2 (Just move)
-                return
-                  ( ServerState
-                      { players = players serverState
-                      , eventHistory = eventHistory serverState
-                      , game = game'
-                      }
-                  , game')
-              | otherwise -> return (serverState, game serverState)
-      case maybeGame of
+      let maybeGame = game serverState
+          maybeUpdatedGame =
+            case maybeGame of
+              Nothing -> maybeGame
+              Just (Game pid1 maybeP1Move pid2 maybeP2Move)
+                | pid == pid1 && isNothing maybeP1Move ->
+                  Just $ Game pid1 (Just move) pid2 maybeP2Move
+                | pid == pid2 && isNothing maybeP2Move ->
+                  Just $ Game pid1 maybeP1Move pid2 (Just move)
+                | otherwise -> maybeGame
+      case maybeUpdatedGame of
         Just (Game pid1 (Just p1Move) pid2 (Just p2Move)) -> do
           let (p1Score, p2Score) = scoreGame p1Move p2Move
-          players' <-
-            modifyMVar serverStateMVar $ \serverState -> do
-              let players' =
-                    updatePlayerScore pid2 p2Score .
-                    updatePlayerScore pid1 p1Score $
-                    players serverState
-                  serverState' =
-                    ServerState
-                      { players = players'
-                      , eventHistory = eventHistory serverState
-                      , game = Nothing
-                      }
-              return (serverState', players')
-          let playerScores = getPlayerScores players'
+              players' =
+                updatePlayerScore pid2 p2Score . updatePlayerScore pid1 p1Score $
+                players serverState
+              playerScores = getPlayerScores players'
+              gameResultEvent = GameResult pid1 p1Move pid2 p2Move
           -- Todo: Kick players whose scores fall too low
           putStrLn "Player Scores:"
           putStrLn "--------------"
           putStrLn $ formatPlayerScores playerScores
           putStrLn "--------------"
-          return $ Just $ GameResult pid1 p1Move pid2 p2Move
-        _ -> return Nothing
+          putMVar publicEventMVar (players', gameResultEvent)
+          return $
+            ServerState
+              { players = players'
+              , eventHistory = gameResultEvent : eventHistory serverState
+              , game = Nothing
+              }
+        _ ->
+          return $
+          ServerState
+            { players = players serverState
+            , eventHistory = eventHistory serverState
+            , game = maybeUpdatedGame
+            }
 
 -- Main
 --------------------------------------------------------------------------------------
 runServer :: IO ()
 runServer = do
   putStrLn "Starting server..."
-  serverStateMVar <- newMVar initialServerState
+  publicEventMVar <- newEmptyMVar
   let moveStream = runHTTPServer httpPort
       announcementStream = runWSServer wsPort
       serverEventStream =
         moveStream `S.parallel` announcementStream `S.parallel` gameStartStream
   putStrLn $ "HTTP server listening on port " <> show httpPort
   putStrLn $ "Websocket server listening on port " <> show wsPort
-  S.mapM_ (broadcast serverStateMVar) .
-    S.mapMaybeM (handleServerEvent serverStateMVar) . S.mapM logServerEvent $
+  broadcast publicEventMVar
+  S.foldlM' (handleServerEvent publicEventMVar) initialServerState .
+    S.mapM logServerEvent $
     serverEventStream
+  return ()
   where
     httpPort = 8081
     wsPort = 8082
