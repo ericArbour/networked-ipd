@@ -146,9 +146,9 @@ runWSServer port = do
   S.repeatM . liftIO $ takeMVar announcementMVar
 
 broadcast :: MVar ([Player], PublicEvent) -> IO ()
-broadcast publicEventMVar = do
+broadcast broadcastMVar = do
   forkIO . forever $ do
-    (players', publicEvent) <- takeMVar publicEventMVar
+    (players', publicEvent) <- takeMVar broadcastMVar
     forM_ players' $ \player ->
       WS.sendTextData (wsConn player) (A.encode publicEvent)
   return ()
@@ -210,7 +210,7 @@ gameStartStream = do
 
 handleStartNewGame ::
      MVar ([Player], PublicEvent) -> ServerState -> IO ServerState
-handleStartNewGame publicEventMVar serverState = do
+handleStartNewGame broadcastMVar serverState = do
   let maybeGame = game serverState
       players' = players serverState
   (maybeNewGame, updatedPlayers) <-
@@ -234,7 +234,7 @@ handleStartNewGame publicEventMVar serverState = do
   case maybeNewGame of
     Just (Game pid1 _ pid2 _) -> do
       let newGameEvent = NewGame pid1 pid2
-      putMVar publicEventMVar (updatedPlayers, newGameEvent)
+      putMVar broadcastMVar (updatedPlayers, newGameEvent)
       return $
         ServerState
           { players = updatedPlayers
@@ -278,7 +278,7 @@ handleServerEvent ::
   -> ServerState
   -> ServerEvent
   -> IO ServerState
-handleServerEvent publicEventMVar serverState event =
+handleServerEvent broadcastMVar serverState event =
   case event of
     Join pid' wsConn' strategy' -> do
       let newPlayer =
@@ -288,7 +288,7 @@ handleServerEvent publicEventMVar serverState event =
           eventHistory' = eventHistory serverState
           joinEvent = PlayerJoin pid' strategy'
       WS.sendTextData wsConn' $ A.encode (IdAssignment pid', eventHistory')
-      putMVar publicEventMVar (players', joinEvent)
+      putMVar broadcastMVar (players', joinEvent)
       return $
         ServerState
           { players = players'
@@ -312,7 +312,7 @@ handleServerEvent publicEventMVar serverState event =
             , eventHistory = eventHistory serverState
             , game = game'
             }
-    StartNewGame -> handleStartNewGame publicEventMVar serverState
+    StartNewGame -> handleStartNewGame broadcastMVar serverState
     GameMove pid move -> do
       let maybeGame = game serverState
           maybeUpdatedGame =
@@ -337,7 +337,7 @@ handleServerEvent publicEventMVar serverState event =
           putStrLn "--------------"
           putStrLn $ formatPlayerScores playerScores
           putStrLn "--------------"
-          putMVar publicEventMVar (players', gameResultEvent)
+          putMVar broadcastMVar (players', gameResultEvent)
           return $
             ServerState
               { players = players'
@@ -357,15 +357,15 @@ handleServerEvent publicEventMVar serverState event =
 runServer :: IO ()
 runServer = do
   putStrLn "Starting server..."
-  publicEventMVar <- newEmptyMVar
+  broadcastMVar <- newEmptyMVar
   let moveStream = runHTTPServer httpPort
       announcementStream = runWSServer wsPort
       serverEventStream =
         moveStream `S.parallel` announcementStream `S.parallel` gameStartStream
   putStrLn $ "HTTP server listening on port " <> show httpPort
   putStrLn $ "Websocket server listening on port " <> show wsPort
-  broadcast publicEventMVar
-  S.foldlM' (handleServerEvent publicEventMVar) initialServerState .
+  broadcast broadcastMVar
+  S.foldlM' (handleServerEvent broadcastMVar) initialServerState .
     S.mapM logServerEvent $
     serverEventStream
   return ()
