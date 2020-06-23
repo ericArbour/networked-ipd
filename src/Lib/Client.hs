@@ -121,7 +121,7 @@ eventHandler myId myMovesMVar moveMap event = do
         putMVar myMovesMVar $ PlayerMove myId myMove
         return moveMap
       | otherwise -> return moveMap
-    GameResult _ _ _ _ -> return $ insertMoveAgainsts event moveMap
+    GameResult {} -> return $ insertMoveAgainsts event moveMap
     _ -> return moveMap
 
 getInitialMoveMap :: [PublicEvent] -> MoveMap
@@ -139,10 +139,7 @@ insertMoveAgainsts pe moveMap =
       case M.lookup movePid moveMap of
         Nothing -> M.insert movePid [MoveAgainst againstPid move] moveMap
         Just moveAgainsts ->
-          M.insert
-            movePid
-            ((MoveAgainst againstPid move) : moveAgainsts)
-            moveMap
+          M.insert movePid (MoveAgainst againstPid move : moveAgainsts) moveMap
 
 getMove :: MoveMap -> PlayerId -> Move
 -- Todo: implement strategies
