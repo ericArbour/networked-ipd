@@ -255,16 +255,13 @@ handleStartNewGame broadcastMVar serverState = do
         then return Nothing
         else do
           rn1 <- randomRIO (0, playerCount - 1)
-          rn2 <- randomRIO (0, playerCount - 1)
+          rn2 <- randomRIO (0, playerCount - 2)
           let idx1 = rn1
               idx2 = getUniqueIdx rn1 rn2
               p1 = players' !! idx1
               p2 = players' !! idx2
           return $ Just $ Game (pid p1) Nothing (pid p2) Nothing
-    getUniqueIdx idx1 idx2
-      | idx1 /= idx2 = idx2
-      | idx2 == 0 = 1
-      | otherwise = idx2 - 1
+    getUniqueIdx idx1 idx2 = if idx2 >= idx1 then idx2+1 else idx2
     kickPlayer pid' players' =
       case getPlayer pid' players' of
         (Just player) -> do
