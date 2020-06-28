@@ -33,8 +33,11 @@ import Lib.Shared
   , PlayerId
   , PlayerMove(..)
   , PublicEvent(..)
-  , Strategy(..)
   )
+
+data Strategy =
+  Default
+  deriving (Eq, Show)
 
 data MoveAgainst =
   MoveAgainst PlayerId Move
@@ -85,8 +88,6 @@ postMoves myMovesMVar = do
 wsClient :: MVar ByteString -> WS.ClientApp ()
 wsClient btstrMVar conn = do
   putStrLn "Connected!"
-  -- Announce strategy to server
-  WS.sendTextData conn . A.encode $ Default
   flip finally disconnect $
     forever $ do
       btstr <- WS.receiveData conn

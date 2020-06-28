@@ -28,18 +28,10 @@ instance ToJSON PlayerMove
 
 instance FromJSON PlayerMove
 
-data Strategy =
-  Default
-  deriving (Eq, Show, Generic)
-
-instance ToJSON Strategy
-
-instance FromJSON Strategy
-
 type Score = Int
 
 data PublicEvent
-  = PlayerJoin PlayerId Strategy
+  = PlayerJoin PlayerId
   | NewGame PlayerId PlayerId
   | GameResult PlayerId Move PlayerId Move
   deriving (Show, Generic)

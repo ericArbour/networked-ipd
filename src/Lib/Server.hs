@@ -31,7 +31,6 @@ import Lib.Shared
   , PlayerMove(..)
   , PublicEvent(..)
   , Score
-  , Strategy(..)
   )
 
 -- Types
@@ -40,7 +39,7 @@ instance Show WS.Connection where
   show = const "wsConn"
 
 data ServerEvent
-  = Join PlayerId WS.Connection Strategy
+  = Join PlayerId WS.Connection
   | Quit PlayerId
   | GameMove PlayerId Move
   | StartNewGame
@@ -49,7 +48,6 @@ data ServerEvent
 data Player =
   Player
     { pid :: PlayerId
-    , strategy :: Strategy
     , wsConn :: WS.Connection
     , score :: Score
     }
@@ -118,13 +116,9 @@ application pidCounterTVar announcementMVar pending = do
   WS.withPingThread conn 30 (return ()) $
     -- Process initial announcement
    do
-    btstr <- WS.receiveData conn
-    case A.decode btstr of
-      (Just strategy') -> do
-        pid' <- atomically $ incrementCounter pidCounterTVar
-        putMVar announcementMVar $ Join pid' conn strategy'
-        flip finally (disconnect pid') $ keepConnAlive conn
-      _ -> WS.sendTextData conn $ T.pack "Invalid strategy."
+    pid' <- atomically $ incrementCounter pidCounterTVar
+    putMVar announcementMVar $ Join pid' conn
+    flip finally (disconnect pid') $ keepConnAlive conn
   where
     incrementCounter pidCounterTVar = do
       nextPid <- readTVar pidCounterTVar >>= \prevId -> return (prevId + 1)
@@ -170,12 +164,7 @@ updatePlayerScore targetPid val ps =
   case getPlayer targetPid ps of
     Nothing -> ps
     Just p ->
-      Player
-        { pid = pid p
-        , score = score p + val
-        , strategy = strategy p
-        , wsConn = wsConn p
-        } :
+      Player {pid = pid p, score = score p + val, wsConn = wsConn p} :
       removePlayer (pid p) ps
 
 getPlayerScores :: [Player] -> [(PlayerId, Score)]
@@ -261,7 +250,10 @@ handleStartNewGame broadcastMVar serverState = do
               p1 = players' !! idx1
               p2 = players' !! idx2
           return $ Just $ Game (pid p1) Nothing (pid p2) Nothing
-    getUniqueIdx idx1 idx2 = if idx2 >= idx1 then idx2+1 else idx2
+    getUniqueIdx idx1 idx2 =
+      if idx2 >= idx1
+        then idx2 + 1
+        else idx2
     kickPlayer pid' players' =
       case getPlayer pid' players' of
         (Just player) -> do
@@ -277,13 +269,11 @@ handleServerEvent ::
   -> IO ServerState
 handleServerEvent broadcastMVar serverState event =
   case event of
-    Join pid' wsConn' strategy' -> do
-      let newPlayer =
-            Player
-              {pid = pid', wsConn = wsConn', strategy = strategy', score = 0}
+    Join pid' wsConn' -> do
+      let newPlayer = Player {pid = pid', wsConn = wsConn', score = 0}
           players' = newPlayer : players serverState
           eventHistory' = eventHistory serverState
-          joinEvent = PlayerJoin pid' strategy'
+          joinEvent = PlayerJoin pid'
       WS.sendTextData wsConn' $ A.encode (IdAssignment pid', eventHistory')
       putMVar broadcastMVar (players', joinEvent)
       return $
