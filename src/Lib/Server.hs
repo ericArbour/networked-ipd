@@ -111,20 +111,18 @@ runHTTPServer port = do
 --------------------------------------------------------------------------------------
 -- Handle incoming websocket connection requests
 application :: TVar Int -> MVar ServerEvent -> WS.PendingConnection -> IO ()
-application pidCounterTVar announcementMVar pending = do
+application pidCounterTVar connectionMVar pending = do
   conn <- WS.acceptRequest pending
-  WS.withPingThread conn 30 (return ()) $
-    -- Process initial announcement
-   do
+  WS.withPingThread conn 30 (return ()) $ do
     pid' <- atomically $ incrementCounter pidCounterTVar
-    putMVar announcementMVar $ Join pid' conn
+    putMVar connectionMVar $ Join pid' conn
     flip finally (disconnect pid') $ keepConnAlive conn
   where
     incrementCounter pidCounterTVar = do
       nextPid <- readTVar pidCounterTVar >>= \prevId -> return (prevId + 1)
       writeTVar pidCounterTVar nextPid
       return nextPid
-    disconnect pid' = putMVar announcementMVar $ Quit pid'
+    disconnect pid' = putMVar connectionMVar $ Quit pid'
     -- Ignore all additional websocket messages from client
     keepConnAlive conn =
       forever $ do
@@ -133,11 +131,11 @@ application pidCounterTVar announcementMVar pending = do
 
 runWSServer :: Int -> S.SerialT IO ServerEvent
 runWSServer port = do
-  announcementMVar <- liftIO newEmptyMVar
+  connectionMVar <- liftIO newEmptyMVar
   pidCounterTVar <- liftIO $ newTVarIO 0
   liftIO . forkIO . WS.runServer "127.0.0.1" port $
-    application pidCounterTVar announcementMVar
-  S.repeatM . liftIO $ takeMVar announcementMVar
+    application pidCounterTVar connectionMVar
+  S.repeatM . liftIO $ takeMVar connectionMVar
 
 broadcast :: MVar ([Player], PublicEvent) -> IO ()
 broadcast broadcastMVar = do
@@ -345,12 +343,12 @@ runServer :: IO ()
 runServer = do
   putStrLn "Starting server..."
   broadcastMVar <- newEmptyMVar
-  let moveStream = runHTTPServer httpPort
-      announcementStream = runWSServer wsPort
+  let connectionStream = runWSServer wsPort
+      moveStream = runHTTPServer httpPort
       serverEventStream =
-        moveStream `S.parallel` announcementStream `S.parallel` gameStartStream
-  putStrLn $ "HTTP server listening on port " <> show httpPort
+        connectionStream `S.parallel` moveStream `S.parallel` gameStartStream
   putStrLn $ "Websocket server listening on port " <> show wsPort
+  putStrLn $ "HTTP server listening on port " <> show httpPort
   broadcast broadcastMVar
   S.foldlM' (handleServerEvent broadcastMVar) initialServerState .
     S.mapM logServerEvent $
