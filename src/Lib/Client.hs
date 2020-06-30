@@ -4,6 +4,7 @@ module Lib.Client
   ( runClient
   ) where
 
+-- startup args :set args --host "127.0.0.1" --http-port 8081 --ws-port 8082 --strategy=Default
 import Control.Concurrent
 import Control.Exception (Exception, finally, throw)
 import Control.Monad (forever)
@@ -39,6 +40,12 @@ import Lib.Shared
   , PublicEvent(..)
   )
 
+type Host = String
+
+type WsPort = Int
+
+type HttpPort = Int
+
 data Strategy =
   Default
   deriving (Eq, Read, Show)
@@ -68,22 +75,22 @@ formatEventHistory = foldr (<>) "" . intersperse "\n" . map show . reverse
 api :: Proxy API
 api = Proxy
 
-hoistHTTPClient :: Manager -> SV.Client IO API
-hoistHTTPClient manager' =
+hoistHTTPClient :: Host -> HttpPort -> Manager -> SV.Client IO API
+hoistHTTPClient host port manager =
   SV.hoistClient api (handleError . getIOClient) (SV.client api)
   where
-    baseurl = SV.BaseUrl SV.Http "localhost" 8081 ""
+    baseurl = SV.BaseUrl SV.Http host port ""
     clientEnv :: SV.ClientEnv
-    clientEnv = SV.mkClientEnv manager' baseurl
+    clientEnv = SV.mkClientEnv manager baseurl
     getIOClient :: SV.ClientM a -> IO (Either SV.ClientError a)
     getIOClient = flip SV.runClientM clientEnv
     handleError :: IO (Either SV.ClientError a) -> IO a
     handleError = fmap (either (error . show) id)
 
-postMoves :: MVar PlayerMove -> IO ()
-postMoves myMovesMVar = do
-  manager' <- newManager defaultManagerSettings
-  let postMove = hoistHTTPClient manager'
+postMoves :: Host -> HttpPort -> MVar PlayerMove -> IO ()
+postMoves host port myMovesMVar = do
+  manager <- newManager defaultManagerSettings
+  let postMove = hoistHTTPClient host port manager
   forkIO . forever $ takeMVar myMovesMVar >>= postMove
   return ()
 
@@ -99,11 +106,11 @@ wsClient btstrMVar conn = do
   where
     disconnect = WS.sendClose conn ("Bye!" :: T.Text)
 
-getWSStream :: S.SerialT IO ByteString
-getWSStream = do
+getWSStream :: Host -> WsPort -> S.SerialT IO ByteString
+getWSStream host port = do
   btstrMVar <- liftIO newEmptyMVar
   liftIO . forkIO . withSocketsDo $
-    WS.runClient "127.0.0.1" 8082 "/" (wsClient btstrMVar)
+    WS.runClient host port "/" (wsClient btstrMVar)
   S.repeatM . liftIO $ takeMVar btstrMVar
 
 decodeOrFail :: ByteString -> IO PublicEvent
@@ -111,74 +118,105 @@ decodeOrFail btstr = maybe (throw $ InvalidEvent btstr) return (A.decode btstr)
 
 -- Command Line Args
 -------------------------------------------------------------------------------
-data Flag
-  = StrategyArg String
-  | Help
+data Arg
+  = Help
+  | HostArg String
+  | HttpPortArg String
+  | WsPortArg String
+  | StrategyArg String
   deriving (Eq, Show)
 
-options :: [OptDescr Flag]
+options :: [OptDescr Arg]
 options =
-  [ Option
+  [ Option [] ["help"] (NoArg Help) "Print this help message."
+  , Option ['h'] ["host"] (ReqArg HostArg "Host") "The server host location."
+  , Option
+      ['w']
+      ["ws-port"]
+      (ReqArg WsPortArg "WS Port")
+      "The websocket port on the server."
+  , Option
+      ['p']
+      ["http-port"]
+      (ReqArg HttpPortArg "HTTP Port")
+      "The http port on the server."
+  , Option
       ['s']
       ["strategy"]
       (ReqArg StrategyArg "Strategy")
       ("The strategy the client will use when playing the game.\n" <>
        "Valid strategies are:\n" <>
-       "Defect\n" <>
-       "Cooperate\n" <>
-       "Random5050\n" <>
-       "Random8020\n" <>
-       "Random9010\n" <>
-       "TitForTat\n" <>
-       "TitForTwoTats\n" <>
-       "Vigilante\n" <>
-       "ForgivingTitForTat\n" <>
-       "Ostracise")
-  , Option [] ["help"] (NoArg Help) "Print this help message."
+       "Defect: Always defect.\n" <>
+       "Cooperate: Always cooperate.\n" <>
+       "Random5050: Randomly cooperate or defect with 50% probability " <>
+       "of defecting.\n" <>
+       "Random8020: Randomly cooperate or defect with 20% probability " <>
+       "of defecting.\n" <>
+       "Random9010: Randomly cooperate or defect with 10% probability " <>
+       "of defecting.\n" <>
+       "TitForTat: If you defected against me last time we played, " <>
+       "then I’ll defect\nagainst you this time, " <>
+       "and otherwise I’ll cooperate.\n" <>
+       "TitForTwoTats: If you defected against me the last two times we " <>
+       "played,\nthen I’ll defect against you this time, " <>
+       "and otherwise I’ll cooperate.\n" <>
+       "Vigilante: If you defected against the last person you played, " <>
+       "then I’ll\ndefect against you this time, and otherwise I’ll " <>
+       "cooperate.\n" <>
+       "ForgivingTitForTat: If you defected against me the last time we " <>
+       "played,\nthen I’ll defect against you this time with 50% " <>
+       "probability, and otherwise\nI’ll cooperate.\n" <>
+       "Ostracise: If you’ve ever defected against anybody, then I’ll " <>
+       "always\ndefect against you, and otherwise I’ll always cooperate.")
   ]
 
-processArgs :: IO Strategy
+processArgs :: IO (Host, WsPort, HttpPort, Strategy)
 processArgs = do
   args <- getArgs
   case getOpt Permute options args of
-    (opts, _, [])
-      | (Help `elem` opts) -> do
+    (args, _, [])
+      | (Help `elem` args) -> do
         hPutStrLn stdout (usageInfo header options)
         exitWith ExitSuccess
-      | not (any isStrategyArg opts) -> do
-        hPutStrLn
-          stderr
-          ("Please provide a strategy.\n" <> usageInfo header options)
-        exitWith (ExitFailure 1)
-      | otherwise -> return Default
+      | otherwise -> do
+        case parseArgs args of
+          Nothing -> do
+            hPutStrLn
+              stderr
+              ("Please provide the required arguments.\n" <>
+               usageInfo header options)
+            exitWith (ExitFailure 1)
+          Just tup -> return tup
     (_, _, errs) -> do
       hPutStrLn stderr (concat errs <> usageInfo header options)
       exitWith (ExitFailure 1)
   where
-    header = "Usage: client-exe [OPTION...]"
+    header =
+      "Usage: client-exe " <>
+      "(--host <HOST> --port <PORT> --strategy <STRATEGY> | --help)"
+
+parseArgs :: [Arg] -> Maybe (Host, WsPort, HttpPort, Strategy)
+parseArgs opts = do
+  HostArg hostStr <- find (isHostArg) opts
+  WsPortArg wsPortStr <- find (isWsPortArg) opts
+  wsPort <- readMaybe wsPortStr
+  HttpPortArg httpPortStr <- find (isHttpPortArg) opts
+  httpPort <- readMaybe httpPortStr
+  StrategyArg strategyStr <- find (isStrategyArg) opts
+  strategy <- readMaybe strategyStr
+  return (hostStr, wsPort, httpPort, strategy)
+  where
+    isHostArg (HostArg _) = True
+    isHostArg _ = False
+    isHttpPortArg (HttpPortArg _) = True
+    isHttpPortArg _ = False
+    isWsPortArg (WsPortArg _) = True
+    isWsPortArg _ = False
     isStrategyArg (StrategyArg _) = True
     isStrategyArg _ = False
 
 -- Game
 -------------------------------------------------------------------------------
-eventHandler ::
-     PlayerId -> MVar PlayerMove -> MoveMap -> PublicEvent -> IO MoveMap
-eventHandler myId myMovesMVar moveMap event = do
-  print event
-  case event of
-    NewGame pid1 pid2
-      | pid1 == myId -> do
-        let myMove = getMove moveMap pid2
-        putMVar myMovesMVar $ PlayerMove myId myMove
-        return moveMap
-      | pid2 == myId -> do
-        let myMove = getMove moveMap pid1
-        putMVar myMovesMVar $ PlayerMove myId myMove
-        return moveMap
-      | otherwise -> return moveMap
-    GameResult {} -> return $ insertMoveAgainsts event moveMap
-    _ -> return moveMap
-
 getInitialMoveMap :: [PublicEvent] -> MoveMap
 getInitialMoveMap = foldr insertMoveAgainsts M.empty
 
@@ -196,16 +234,40 @@ insertMoveAgainsts pe moveMap =
         Just moveAgainsts ->
           M.insert movePid (MoveAgainst againstPid move : moveAgainsts) moveMap
 
-getMove :: MoveMap -> PlayerId -> Move
--- Todo: implement strategies
-getMove moveMap opponent = Defect
+eventHandler ::
+     Strategy
+  -> PlayerId
+  -> MVar PlayerMove
+  -> MoveMap
+  -> PublicEvent
+  -> IO MoveMap
+eventHandler strategy myId myMovesMVar moveMap event = do
+  print event
+  case event of
+    NewGame pid1 pid2
+      | pid1 == myId || pid2 == myId -> do
+        let opId =
+              if pid1 == myId
+                then pid2
+                else pid1
+            myMove = getMove strategy moveMap myId opId
+        putMVar myMovesMVar $ PlayerMove myId myMove
+        return moveMap
+      | otherwise -> return moveMap
+    GameResult {} -> return $ insertMoveAgainsts event moveMap
+    _ -> return moveMap
+
+getMove :: Strategy -> MoveMap -> PlayerId -> PlayerId -> Move
+getMove strategy moveMap myId opId =
+  case strategy of
+    Default -> Defect
 
 -- Main
 --------------------------------------------------------------------------------
 runClient :: IO ()
 runClient = do
-  processArgs
-  maybeDecompStream <- S.uncons getWSStream
+  (host, wsPort, httpPort, strategy) <- processArgs
+  maybeDecompStream <- S.uncons $ getWSStream host wsPort
   (initialData, streamTail) <-
     maybe (throw NoStreamFound) return maybeDecompStream
   (idAssignment, eventHistory) <-
@@ -215,7 +277,8 @@ runClient = do
   let (IdAssignment myId) = idAssignment
       moveMap = getInitialMoveMap eventHistory
   print moveMap
-  postMoves myMovesMVar
-  S.foldlM' (eventHandler myId myMovesMVar) moveMap . S.mapM decodeOrFail $
+  postMoves host httpPort myMovesMVar
+  S.foldlM' (eventHandler strategy myId myMovesMVar) moveMap .
+    S.mapM decodeOrFail $
     streamTail
   return ()
