@@ -20,6 +20,7 @@ import System.Console.GetOpt
 import System.Environment (getArgs)
 import System.Exit
 import System.IO
+import System.Random (randomRIO)
 import Text.Read (readMaybe)
 
 import qualified Data.Aeson as A
@@ -34,11 +35,11 @@ import qualified Streamly.Prelude as S
 import Lib.Shared
   ( API
   , IdAssignment(..)
-  , Move(..)
   , PlayerId
   , PlayerMove(..)
   , PublicEvent(..)
   )
+import qualified Lib.Shared as Move (Move(..))
 
 type Host = String
 
@@ -46,12 +47,21 @@ type WsPort = Int
 
 type HttpPort = Int
 
-data Strategy =
-  Default
+data Strategy
+  = Defect
+  | Cooperate
+  | Random5050
+  | Random8020
+  | Random9010
+  | TitForTat
+  | TitForTwoTats
+  | Vigilante
+  | ForgivingTitForTat
+  | Ostracize
   deriving (Eq, Read, Show)
 
 data MoveAgainst =
-  MoveAgainst PlayerId Move
+  MoveAgainst PlayerId Move.Move
   deriving (Show)
 
 type MoveMap = M.Map PlayerId [MoveAgainst]
@@ -166,7 +176,7 @@ options =
        "ForgivingTitForTat: If you defected against me the last time we " <>
        "played,\nthen I’ll defect against you this time with 50% " <>
        "probability, and otherwise\nI’ll cooperate.\n" <>
-       "Ostracise: If you’ve ever defected against anybody, then I’ll " <>
+       "Ostracize: If you’ve ever defected against anybody, then I’ll " <>
        "always\ndefect against you, and otherwise I’ll always cooperate.")
   ]
 
@@ -250,17 +260,48 @@ eventHandler strategy myId myMovesMVar moveMap event = do
               if pid1 == myId
                 then pid2
                 else pid1
-            myMove = getMove strategy moveMap myId opId
+        myMove <- getMove strategy myId opId moveMap
         putMVar myMovesMVar $ PlayerMove myId myMove
         return moveMap
       | otherwise -> return moveMap
     GameResult {} -> return $ insertMoveAgainsts event moveMap
     _ -> return moveMap
 
-getMove :: Strategy -> MoveMap -> PlayerId -> PlayerId -> Move
-getMove strategy moveMap myId opId =
+getMove :: Strategy -> PlayerId -> PlayerId -> MoveMap -> IO Move.Move
+getMove strategy myId opId moveMap =
   case strategy of
-    Default -> Defect
+    Defect -> return Move.Defect
+    Cooperate -> return Move.Cooperate
+    Random5050 -> randomDefect 2
+    Random8020 -> randomDefect 5
+    Random9010 -> randomDefect 10
+    TitForTat -> return $ titForTat myId opId moveMap
+    TitForTwoTats -> undefined
+    Vigilante -> undefined
+    ForgivingTitForTat -> undefined
+    Ostracize -> undefined
+
+randomDefect :: Int -> IO Move.Move
+randomDefect denom = do
+  rn <- randomRIO (1, denom)
+  return $
+    if rn == 1
+      then Move.Defect
+      else Move.Cooperate
+
+titForTat :: PlayerId -> PlayerId -> MoveMap -> Move.Move
+titForTat myId opId moveMap =
+  case M.lookup opId moveMap of
+    Nothing -> Move.Cooperate
+    Just opMoves ->
+      case find isMoveAgainstMe opMoves of
+        Just (MoveAgainst _ Move.Defect) -> Move.Defect
+        otherwise -> Move.Cooperate
+  where
+    isMoveAgainstMe (MoveAgainst id _) = myId == id
+
+titForTwoTats :: PlayerId -> PlayerId -> MoveMap -> Move.Move
+titForTwoTats myId opId moveMap = undefined
 
 -- Main
 --------------------------------------------------------------------------------
