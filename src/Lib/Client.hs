@@ -7,11 +7,12 @@ module Lib.Client
 -- startup args :set args --host "127.0.0.1" --http-port 8081 --ws-port 8082 --strategy=Default
 import Control.Concurrent
 import Control.Exception (Exception, finally, throw)
-import Control.Monad (forever)
+import Control.Monad ((<=<), forever)
 import Control.Monad.Trans (liftIO)
+import Data.Bool (bool)
 import Data.ByteString.Lazy (ByteString)
-import Data.List (find, intersperse)
-import Data.Maybe (maybe)
+import Data.List (dropWhile, find, intersperse)
+import Data.Maybe (listToMaybe, maybe)
 import Data.Proxy (Proxy(..))
 import Data.Typeable (Typeable)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
@@ -275,11 +276,16 @@ getMove strategy myId opId moveMap =
     Random5050 -> randomDefect 2
     Random8020 -> randomDefect 5
     Random9010 -> randomDefect 10
-    TitForTat -> return $ titForTat myId opId moveMap
-    TitForTwoTats -> undefined
-    Vigilante -> undefined
-    ForgivingTitForTat -> undefined
-    Ostracize -> undefined
+    TitForTat -> return . reaction $ titForTat myId
+    TitForTwoTats -> return . reaction $ titForTwoTats myId
+    Vigilante -> return . reaction $ maybe Move.Cooperate opMove . listToMaybe
+    ForgivingTitForTat ->
+      case reaction (titForTat myId) of
+        Move.Defect -> randomDefect 2
+        Move.Cooperate -> return Move.Cooperate
+    Ostracize -> return . reaction $ maybe Move.Cooperate opMove . find isDefect
+  where
+    reaction f = maybe Move.Cooperate f $ M.lookup opId moveMap
 
 randomDefect :: Int -> IO Move.Move
 randomDefect denom = do
@@ -289,19 +295,25 @@ randomDefect denom = do
       then Move.Defect
       else Move.Cooperate
 
-titForTat :: PlayerId -> PlayerId -> MoveMap -> Move.Move
-titForTat myId opId moveMap =
-  case M.lookup opId moveMap of
-    Nothing -> Move.Cooperate
-    Just opMoves ->
-      case find isMoveAgainstMe opMoves of
-        Just (MoveAgainst _ Move.Defect) -> Move.Defect
-        otherwise -> Move.Cooperate
-  where
-    isMoveAgainstMe (MoveAgainst id _) = myId == id
+isDefect :: MoveAgainst -> Bool
+isDefect (MoveAgainst _ Move.Defect) = True
+isDefect _ = False
 
-titForTwoTats :: PlayerId -> PlayerId -> MoveMap -> Move.Move
-titForTwoTats myId opId moveMap = undefined
+isAgainstMe :: PlayerId -> MoveAgainst -> Bool
+isAgainstMe myId (MoveAgainst id _) = myId == id
+
+opMove :: MoveAgainst -> Move.Move
+opMove (MoveAgainst _ move) = move
+
+titForTat :: PlayerId -> [MoveAgainst] -> Move.Move
+titForTat myId = maybe Move.Cooperate opMove . find (isAgainstMe myId)
+
+titForTwoTats :: PlayerId -> [MoveAgainst] -> Move.Move
+titForTwoTats myId opMas =
+  case dropWhile (not . isAgainstMe myId) opMas of
+    ma:[] -> Move.Cooperate
+    MoveAgainst _ Move.Defect:mas -> titForTat myId mas
+    otherwise -> Move.Cooperate
 
 -- Main
 --------------------------------------------------------------------------------
