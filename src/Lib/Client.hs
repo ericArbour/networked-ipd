@@ -7,9 +7,8 @@ module Lib.Client
 -- startup args :set args --host "127.0.0.1" --http-port 8081 --ws-port 8082 --strategy=Default
 import Control.Concurrent
 import Control.Exception (Exception, finally, throw)
-import Control.Monad ((<=<), forever)
+import Control.Monad (forever)
 import Control.Monad.Trans (liftIO)
-import Data.Bool (bool)
 import Data.ByteString.Lazy (ByteString)
 import Data.List (dropWhile, find, intersperse)
 import Data.Maybe (listToMaybe, maybe)
