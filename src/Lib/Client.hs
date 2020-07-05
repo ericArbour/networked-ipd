@@ -185,10 +185,10 @@ processArgs = do
   args <- getArgs
   case getOpt Permute options args of
     (args, _, [])
-      | (Help `elem` args) -> do
-        hPutStrLn stdout (usageInfo header options)
-        exitWith ExitSuccess
-      | otherwise -> do
+      | Help `elem` args -> do
+        putStrLn (usageInfo header options)
+        exitSuccess
+      | otherwise ->
         case parseArgs args of
           Nothing -> do
             hPutStrLn
@@ -207,12 +207,12 @@ processArgs = do
 
 parseArgs :: [Arg] -> Maybe (Host, WsPort, HttpPort, Strategy)
 parseArgs opts = do
-  HostArg hostStr <- find (isHostArg) opts
-  WsPortArg wsPortStr <- find (isWsPortArg) opts
+  HostArg hostStr <- find isHostArg opts
+  WsPortArg wsPortStr <- find isWsPortArg opts
   wsPort <- readMaybe wsPortStr
-  HttpPortArg httpPortStr <- find (isHttpPortArg) opts
+  HttpPortArg httpPortStr <- find isHttpPortArg opts
   httpPort <- readMaybe httpPortStr
-  StrategyArg strategyStr <- find (isStrategyArg) opts
+  StrategyArg strategyStr <- find isStrategyArg opts
   strategy <- readMaybe strategyStr
   return (hostStr, wsPort, httpPort, strategy)
   where
@@ -310,9 +310,9 @@ titForTat myId = maybe Move.Cooperate opMove . find (isAgainstMe myId)
 titForTwoTats :: PlayerId -> [MoveAgainst] -> Move.Move
 titForTwoTats myId opMas =
   case dropWhile (not . isAgainstMe myId) opMas of
-    ma:[] -> Move.Cooperate
+    [ma] -> Move.Cooperate
     MoveAgainst _ Move.Defect:mas -> titForTat myId mas
-    otherwise -> Move.Cooperate
+    _ -> Move.Cooperate
 
 -- Main
 --------------------------------------------------------------------------------
