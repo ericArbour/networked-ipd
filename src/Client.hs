@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Lib.Client
+module Client
   ( runClient
   ) where
 
@@ -32,14 +32,8 @@ import qualified Servant.Client as SV
 import qualified Streamly as S
 import qualified Streamly.Prelude as S
 
-import Lib.Shared
-  ( API
-  , IdAssignment(..)
-  , PlayerId
-  , PlayerMove(..)
-  , PublicEvent(..)
-  )
-import qualified Lib.Shared as Move (Move(..))
+import qualified Shared as Move (Move(..))
+import Shared (API, IdAssignment(..), PlayerId, PlayerMove(..), PublicEvent(..))
 
 type Host = String
 

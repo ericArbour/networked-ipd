@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Lib.Server
+module Server
   ( runServer
   ) where
 
@@ -23,7 +23,7 @@ import qualified Servant as SV
 import qualified Streamly as S
 import qualified Streamly.Prelude as S
 
-import Lib.Shared
+import Shared
   ( API
   , IdAssignment(..)
   , Move(..)

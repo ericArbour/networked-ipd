@@ -2,7 +2,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Lib.Shared where
+module Shared where
 
 import Data.Aeson.Types (FromJSON, ToJSON)
 import GHC.Generics (Generic)
