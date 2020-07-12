@@ -2,6 +2,10 @@
 
 module Client
   ( runClient
+  , getMove
+  , Strategy(..)
+  , MoveMap
+  , MoveAgainst(..)
   ) where
 
 -- startup args :set args --host "127.0.0.1" --http-port 8081 --ws-port 8082 --strategy=Default
