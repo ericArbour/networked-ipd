@@ -10,6 +10,8 @@ import Control.Concurrent.STM
 import Control.Exception (finally)
 import Control.Monad (forM_, forever)
 import Control.Monad.Trans (liftIO)
+import Data.Configurator
+import Data.Configurator.Types (Config)
 import Data.List (find, intersperse)
 import Data.Maybe (isJust, isNothing)
 import Network.Wai.Handler.Warp (run)
@@ -62,26 +64,6 @@ data ServerState =
     , eventHistory :: [PublicEvent]
     , game :: Maybe Game
     }
-
--- Variables
--------------------------------------------------------------------------------------
--- Todo: move these to configuration file
-scoreA :: Int
-scoreA = 2
-
-scoreB :: Int
-scoreB = 1
-
-scoreC :: Int
-scoreC = -1
-
-minScore :: Int
-minScore = -200
-
-gameDuration :: Int
-gameDuration = seconds 1
-  where
-    seconds = (* 1000000)
 
 -- HTTP
 -------------------------------------------------------------------------------------
@@ -170,11 +152,11 @@ getPlayerScores = map playerToScore
   where
     playerToScore p = (pid p, score p)
 
-scoreGame :: Move -> Move -> (Int, Int)
-scoreGame Defect Cooperate = (scoreA, scoreC)
-scoreGame Cooperate Defect = (scoreC, scoreA)
-scoreGame Cooperate Cooperate = (scoreB, scoreB)
-scoreGame Defect Defect = (scoreC, scoreC)
+scoreGame :: (Int, Int, Int) -> Move -> Move -> (Int, Int)
+scoreGame (sA, sB, sC) Defect Cooperate = (sA, sC)
+scoreGame (sA, sB, sC) Cooperate Defect = (sC, sA)
+scoreGame (sA, sB, sC) Cooperate Cooperate = (sB, sB)
+scoreGame (sA, sB, sC) Defect Defect = (sC, sC)
 
 formatPlayerScores :: [(PlayerId, Score)] -> String
 formatPlayerScores = foldr (<>) "" . intersperse "\n" . map playerScoreToString
@@ -187,8 +169,8 @@ logServerEvent event = do
   putStrLn $ "Server Event: " <> show event
   return event
 
-gameStartStream :: S.SerialT IO ServerEvent
-gameStartStream = do
+gameStartStream :: Int -> S.SerialT IO ServerEvent
+gameStartStream gameDuration = do
   startNewGameMVar <- liftIO newEmptyMVar
   liftIO . forkIO . forever $ do
     threadDelay gameDuration
@@ -261,11 +243,12 @@ handleStartNewGame broadcastMVar serverState = do
         Nothing -> return players'
 
 handleServerEvent ::
-     MVar ([Player], PublicEvent)
+     (Int, Int, Int)
+  -> MVar ([Player], PublicEvent)
   -> ServerState
   -> ServerEvent
   -> IO ServerState
-handleServerEvent broadcastMVar serverState event =
+handleServerEvent scores broadcastMVar serverState event =
   case event of
     Join pid' wsConn' -> do
       let newPlayer = Player {pid = pid', wsConn = wsConn', score = 0}
@@ -311,7 +294,7 @@ handleServerEvent broadcastMVar serverState event =
                 | otherwise -> maybeGame
       case maybeUpdatedGame of
         Just (Game pid1 (Just p1Move) pid2 (Just p2Move)) -> do
-          let (p1Score, p2Score) = scoreGame p1Move p2Move
+          let (p1Score, p2Score) = scoreGame scores p1Move p2Move
               players' =
                 updatePlayerScore pid2 p2Score . updatePlayerScore pid1 p1Score $
                 players serverState
@@ -342,15 +325,23 @@ handleServerEvent broadcastMVar serverState event =
 runServer :: IO ()
 runServer = do
   putStrLn "Starting server..."
+  cfg <- load [Required "server.cfg"]
+  gameDuration <- require cfg "gameDuration"
+  scoreA <- require cfg "scoreA"
+  scoreB <- require cfg "scoreB"
+  scoreC <- require cfg "scoreC"
   broadcastMVar <- newEmptyMVar
   let connectionStream = runWSServer wsPort
       moveStream = runHTTPServer httpPort
       serverEventStream =
-        connectionStream `S.parallel` moveStream `S.parallel` gameStartStream
+        connectionStream `S.parallel` moveStream `S.parallel`
+        gameStartStream gameDuration
   putStrLn $ "Websocket server listening on port " <> show wsPort
   putStrLn $ "HTTP server listening on port " <> show httpPort
   broadcast broadcastMVar
-  S.foldlM' (handleServerEvent broadcastMVar) initialServerState .
+  S.foldlM'
+    (handleServerEvent (scoreA, scoreB, scoreC) broadcastMVar)
+    initialServerState .
     S.mapM logServerEvent $
     serverEventStream
   return ()
