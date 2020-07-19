@@ -362,12 +362,12 @@ startClients host httpPort wsPort stratStrs =
       " --strategy " <>
       stratStr
 
-getRandomStrategies :: Int -> IO [String]
-getRandomStrategies n
+getRandomStratStrs :: Int -> IO [String]
+getRandomStratStrs n
   | n > 0 = do
     rn <- randomRIO (0, length strategies - 1)
-    others <- getRandomStrategies (n - 1)
-    return $ (show $ strategies !! rn) : others
+    others <- getRandomStratStrs (n - 1)
+    return $ show (strategies !! rn) : others
   | otherwise = return []
   where
     strategies :: [Strategy]
@@ -388,6 +388,7 @@ runServer = do
   minScore <- require cfg "minScore"
   stratStrs <- require cfg "players"
   randomStratCount <- require cfg "randomPlayerCount"
+  randomStratStrs <- getRandomStratStrs randomStratCount
   let connectionStream = runWSServer host wsPort
       moveStream = runHTTPServer httpPort
       serverEventStream =
@@ -397,8 +398,7 @@ runServer = do
   putStrLn $ "HTTP server listening on port " <> show httpPort
   broadcastMVar <- newEmptyMVar
   broadcast broadcastMVar
-  randomStrats <- getRandomStrategies randomStratCount
-  startClients host httpPort wsPort (randomStrats ++ stratStrs)
+  startClients host httpPort wsPort (randomStratStrs ++ stratStrs)
   S.foldlM'
     (handleServerEvent (scoreA, scoreB, scoreC) minScore broadcastMVar)
     initialServerState .
