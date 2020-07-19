@@ -35,6 +35,7 @@ import Shared
   , PlayerMove(..)
   , PublicEvent(..)
   , Score
+  , Strategy(..)
   )
 
 -- Types
@@ -343,7 +344,7 @@ startClients :: String -> Int -> Int -> [String] -> IO ()
 startClients host httpPort wsPort stratStrs =
   forM_ stratStrs $ \stratStr ->
     forkIO $
-      -- Allow stderr to inherit to parent process so child errs are visible
+      -- Allow child stderr to inherit from parent process so child errs are visible
      do
       (_, Just hout, _, phandle) <-
         createProcess (startClient stratStr) {std_out = CreatePipe}
@@ -361,6 +362,17 @@ startClients host httpPort wsPort stratStrs =
       " --strategy " <>
       stratStr
 
+getRandomStrategies :: Int -> IO [String]
+getRandomStrategies n
+  | n > 0 = do
+    rn <- randomRIO (0, length strategies - 1)
+    others <- getRandomStrategies (n - 1)
+    return $ (show $ strategies !! rn) : others
+  | otherwise = return []
+  where
+    strategies :: [Strategy]
+    strategies = [minBound .. maxBound]
+
 -- Main
 --------------------------------------------------------------------------------------
 runServer :: IO ()
@@ -375,6 +387,7 @@ runServer = do
   scoreC <- require cfg "scoreC"
   minScore <- require cfg "minScore"
   stratStrs <- require cfg "players"
+  randomStratCount <- require cfg "randomPlayerCount"
   let connectionStream = runWSServer host wsPort
       moveStream = runHTTPServer httpPort
       serverEventStream =
@@ -384,7 +397,8 @@ runServer = do
   putStrLn $ "HTTP server listening on port " <> show httpPort
   broadcastMVar <- newEmptyMVar
   broadcast broadcastMVar
-  startClients host httpPort wsPort stratStrs
+  randomStrats <- getRandomStrategies randomStratCount
+  startClients host httpPort wsPort (randomStrats ++ stratStrs)
   S.foldlM'
     (handleServerEvent (scoreA, scoreB, scoreC) minScore broadcastMVar)
     initialServerState .

@@ -36,8 +36,15 @@ import qualified Servant.Client as SV
 import qualified Streamly as S
 import qualified Streamly.Prelude as S
 
-import qualified Shared as Move (Move(..))
-import Shared (API, IdAssignment(..), PlayerId, PlayerMove(..), PublicEvent(..))
+import Shared
+  ( API
+  , IdAssignment(..)
+  , Move(..)
+  , PlayerId
+  , PlayerMove(..)
+  , PublicEvent(..)
+  , Strategy(..)
+  )
 
 type Host = String
 
@@ -45,21 +52,8 @@ type WsPort = Int
 
 type HttpPort = Int
 
-data Strategy
-  = Defect
-  | Cooperate
-  | Random5050
-  | Random8020
-  | Random9010
-  | TitForTat
-  | TitForTwoTats
-  | Vigilante
-  | ForgivingTitForTat
-  | Ostracize
-  deriving (Eq, Read, Show)
-
 data MoveAgainst =
-  MoveAgainst PlayerId Move.Move
+  MoveAgainst PlayerId Move
   deriving (Show)
 
 type MoveMap = M.Map PlayerId [MoveAgainst]
@@ -156,8 +150,8 @@ options =
       (ReqArg StrategyArg "Strategy")
       ("The strategy the client will use when playing the game.\n" <>
        "Valid strategies are:\n" <>
-       "Defect: Always defect.\n" <>
-       "Cooperate: Always cooperate.\n" <>
+       "AlwaysDefect: Always defect.\n" <>
+       "AlwaysCooperate: Always cooperate.\n" <>
        "Random5050: Randomly cooperate or defect with 50% probability " <>
        "of defecting.\n" <>
        "Random8020: Randomly cooperate or defect with 20% probability " <>
@@ -267,52 +261,52 @@ eventHandler strategy myId myMovesMVar moveMap event = do
     GameResult {} -> return $ insertMoveAgainsts event moveMap
     _ -> return moveMap
 
-getMove :: Strategy -> PlayerId -> PlayerId -> MoveMap -> IO Move.Move
+getMove :: Strategy -> PlayerId -> PlayerId -> MoveMap -> IO Move
 getMove strategy myId opId moveMap =
   case strategy of
-    Defect -> return Move.Defect
-    Cooperate -> return Move.Cooperate
+    AlwaysDefect -> return Defect
+    AlwaysCooperate -> return Cooperate
     Random5050 -> randomDefect 2
     Random8020 -> randomDefect 5
     Random9010 -> randomDefect 10
     TitForTat -> return . reaction $ titForTat myId
     TitForTwoTats -> return . reaction $ titForTwoTats myId
-    Vigilante -> return . reaction $ maybe Move.Cooperate opMove . listToMaybe
+    Vigilante -> return . reaction $ maybe Cooperate opMove . listToMaybe
     ForgivingTitForTat ->
       case reaction (titForTat myId) of
-        Move.Defect -> randomDefect 2
-        Move.Cooperate -> return Move.Cooperate
-    Ostracize -> return . reaction $ maybe Move.Cooperate opMove . find isDefect
+        Defect -> randomDefect 2
+        Cooperate -> return Cooperate
+    Ostracize -> return . reaction $ maybe Cooperate opMove . find isDefect
   where
-    reaction f = maybe Move.Cooperate f $ M.lookup opId moveMap
+    reaction f = maybe Cooperate f $ M.lookup opId moveMap
 
-randomDefect :: Int -> IO Move.Move
+randomDefect :: Int -> IO Move
 randomDefect denom = do
   rn <- randomRIO (1, denom)
   return $
     if rn == 1
-      then Move.Defect
-      else Move.Cooperate
+      then Defect
+      else Cooperate
 
 isDefect :: MoveAgainst -> Bool
-isDefect (MoveAgainst _ Move.Defect) = True
+isDefect (MoveAgainst _ Defect) = True
 isDefect _ = False
 
 isAgainstMe :: PlayerId -> MoveAgainst -> Bool
 isAgainstMe myId (MoveAgainst id _) = myId == id
 
-opMove :: MoveAgainst -> Move.Move
+opMove :: MoveAgainst -> Move
 opMove (MoveAgainst _ move) = move
 
-titForTat :: PlayerId -> [MoveAgainst] -> Move.Move
-titForTat myId = maybe Move.Cooperate opMove . find (isAgainstMe myId)
+titForTat :: PlayerId -> [MoveAgainst] -> Move
+titForTat myId = maybe Cooperate opMove . find (isAgainstMe myId)
 
-titForTwoTats :: PlayerId -> [MoveAgainst] -> Move.Move
+titForTwoTats :: PlayerId -> [MoveAgainst] -> Move
 titForTwoTats myId opMas =
   case dropWhile (not . isAgainstMe myId) opMas of
-    [ma] -> Move.Cooperate
-    MoveAgainst _ Move.Defect:mas -> titForTat myId mas
-    _ -> Move.Cooperate
+    [ma] -> Cooperate
+    MoveAgainst _ Defect:mas -> titForTat myId mas
+    _ -> Cooperate
 
 -- Main
 --------------------------------------------------------------------------------

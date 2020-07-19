@@ -30,6 +30,19 @@ instance FromJSON PlayerMove
 
 type Score = Int
 
+data Strategy
+  = AlwaysDefect
+  | AlwaysCooperate
+  | Random5050
+  | Random8020
+  | Random9010
+  | TitForTat
+  | TitForTwoTats
+  | Vigilante
+  | ForgivingTitForTat
+  | Ostracize
+  deriving (Eq, Read, Show, Enum, Bounded)
+
 data PublicEvent
   = PlayerJoin PlayerId
   | NewGame PlayerId PlayerId
