@@ -15,6 +15,7 @@ import Data.Configurator.Types (Config)
 import Data.List (find, intersperse)
 import Data.Maybe (isJust, isNothing)
 import Network.Wai.Handler.Warp (run)
+import System.Process
 import System.Random (randomRIO)
 
 import qualified Data.Aeson as A
@@ -111,11 +112,11 @@ application pidCounterTVar connectionMVar pending = do
         WS.receiveData conn :: IO T.Text
         return ()
 
-runWSServer :: Int -> S.SerialT IO ServerEvent
-runWSServer port = do
+runWSServer :: String -> Int -> S.SerialT IO ServerEvent
+runWSServer host port = do
   connectionMVar <- liftIO newEmptyMVar
   pidCounterTVar <- liftIO $ newTVarIO 0
-  liftIO . forkIO . WS.runServer "127.0.0.1" port $
+  liftIO . forkIO . WS.runServer host port $
     application pidCounterTVar connectionMVar
   S.repeatM . liftIO $ takeMVar connectionMVar
 
@@ -337,26 +338,44 @@ handleServerEvent scores minScore broadcastMVar serverState event =
             , game = maybeUpdatedGame
             }
 
+startClients :: String -> Int -> Int -> [String] -> IO ()
+startClients host httpPort wsPort stratStrs = do
+  forkIO . forM_ stratStrs $ \stratStr -> createProcess (startClient stratStr)
+  return ()
+  where
+    startClient stratStr =
+      shell $
+      "stack exec client-exe -- --host " <> host <> " --http-port " <>
+      show httpPort <>
+      " --ws-port " <>
+      show wsPort <>
+      " --strategy " <>
+      stratStr
+
 -- Main
 --------------------------------------------------------------------------------------
 runServer :: IO ()
 runServer = do
   putStrLn "Starting server..."
   cfg <- load [Required "server.cfg"]
+  httpPort <- require cfg "httpPort"
+  wsPort <- require cfg "wsPort"
   gameDuration <- require cfg "gameDuration"
   scoreA <- require cfg "scoreA"
   scoreB <- require cfg "scoreB"
   scoreC <- require cfg "scoreC"
   minScore <- require cfg "minScore"
-  broadcastMVar <- newEmptyMVar
-  let connectionStream = runWSServer wsPort
+  stratStrs <- require cfg "players"
+  let connectionStream = runWSServer host wsPort
       moveStream = runHTTPServer httpPort
       serverEventStream =
         connectionStream `S.parallel` moveStream `S.parallel`
         gameStartStream gameDuration
   putStrLn $ "Websocket server listening on port " <> show wsPort
   putStrLn $ "HTTP server listening on port " <> show httpPort
+  broadcastMVar <- newEmptyMVar
   broadcast broadcastMVar
+  startClients host httpPort wsPort stratStrs
   S.foldlM'
     (handleServerEvent (scoreA, scoreB, scoreC) minScore broadcastMVar)
     initialServerState .
@@ -364,5 +383,4 @@ runServer = do
     serverEventStream
   return ()
   where
-    httpPort = 8081
-    wsPort = 8082
+    host = "127.0.0.1"

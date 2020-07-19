@@ -29,6 +29,7 @@ dependencies:
 - http-client
 - mtl
 - network
+- process
 - random
 - servant-client
 - servant-server
