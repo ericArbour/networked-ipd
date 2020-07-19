@@ -112,7 +112,9 @@ wsClient btstrMVar conn = do
       btstr <- WS.receiveData conn
       putMVar btstrMVar btstr
   where
-    disconnect = WS.sendClose conn ("Bye!" :: T.Text)
+    disconnect = do
+      WS.sendClose conn ("Bye!" :: T.Text)
+      exitSuccess
 
 getWSStream :: Host -> WsPort -> S.SerialT IO ByteString
 getWSStream host port = do

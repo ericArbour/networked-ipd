@@ -24,6 +24,7 @@ import qualified Data.Text.IO as T
 import qualified Network.WebSockets as WS
 import qualified Servant as SV
 import qualified Streamly as S
+import qualified Streamly.Internal.FileSystem.Handle as FH
 import qualified Streamly.Prelude as S
 
 import Shared
@@ -339,9 +340,14 @@ handleServerEvent scores minScore broadcastMVar serverState event =
             }
 
 startClients :: String -> Int -> Int -> [String] -> IO ()
-startClients host httpPort wsPort stratStrs = do
-  forkIO . forM_ stratStrs $ \stratStr -> createProcess (startClient stratStr)
-  return ()
+startClients host httpPort wsPort stratStrs =
+  forM_ stratStrs $ \stratStr ->
+    forkIO $ do
+      (_, Just hout, _, phandle) <-
+        createProcess (startClient stratStr) {std_out = CreatePipe}
+      S.drain $ FH.toBytes hout
+      waitForProcess phandle
+      return ()
   where
     startClient stratStr =
       shell $
