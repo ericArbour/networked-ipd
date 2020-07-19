@@ -8,7 +8,7 @@ module Server
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Exception (finally)
-import Control.Monad (forM_, forever)
+import Control.Monad (forM_, forever, when)
 import Control.Monad.Trans (liftIO)
 import Data.Configurator
 import Data.Configurator.Types (Config)
@@ -139,20 +139,21 @@ removePlayer pid' = filter ((/= pid') . pid)
 getPlayer :: PlayerId -> [Player] -> Maybe Player
 getPlayer targetPid = find (\p -> pid p == targetPid)
 
-updatePlayerScore :: PlayerId -> Int -> [Player] -> [Player]
+updatePlayerScore :: PlayerId -> Score -> [Player] -> ([Player], Score)
 updatePlayerScore targetPid val ps =
   case getPlayer targetPid ps of
-    Nothing -> ps
+    Nothing -> (ps, 0)
     Just p ->
-      Player {pid = pid p, score = score p + val, wsConn = wsConn p} :
-      removePlayer (pid p) ps
+      ( Player {pid = pid p, score = score p + val, wsConn = wsConn p} :
+        removePlayer (pid p) ps
+      , score p + val)
 
 getPlayerScores :: [Player] -> [(PlayerId, Score)]
 getPlayerScores = map playerToScore
   where
     playerToScore p = (pid p, score p)
 
-scoreGame :: (Int, Int, Int) -> Move -> Move -> (Int, Int)
+scoreGame :: (Score, Score, Score) -> Move -> Move -> (Score, Score)
 scoreGame (sA, sB, sC) Defect Cooperate = (sA, sC)
 scoreGame (sA, sB, sC) Cooperate Defect = (sC, sA)
 scoreGame (sA, sB, sC) Cooperate Cooperate = (sB, sB)
@@ -163,6 +164,20 @@ formatPlayerScores = foldr (<>) "" . intersperse "\n" . map playerScoreToString
   where
     playerScoreToString (pid', score') =
       "Player Id: " <> show pid' <> ", Score: " <> show score' <> "."
+
+kickPlayer :: T.Text -> PlayerId -> [Player] -> IO [Player]
+kickPlayer message pid' players' =
+  case getPlayer pid' players' of
+    (Just player) -> do
+      WS.sendClose (wsConn player) message
+      return $ removePlayer pid' players'
+    Nothing -> return players'
+
+kickPlayerForTime :: PlayerId -> [Player] -> IO [Player]
+kickPlayerForTime = kickPlayer "You took too long to make a move, goodbye!"
+
+kickPlayerForScore :: PlayerId -> [Player] -> IO [Player]
+kickPlayerForScore = kickPlayer "Your score is too low, goodbye!"
 
 logServerEvent :: ServerEvent -> IO ServerEvent
 logServerEvent event = do
@@ -189,11 +204,11 @@ handleStartNewGame broadcastMVar serverState = do
        -> do
         players'' <-
           if isNothing m1
-            then kickPlayer pid1 players'
+            then kickPlayerForTime pid1 players'
             else return players'
         players''' <-
           if isNothing m2
-            then kickPlayer pid2 players''
+            then kickPlayerForTime pid2 players''
             else return players''
         maybeGame <- makeNewGame players'''
         return (maybeGame, players''')
@@ -234,21 +249,15 @@ handleStartNewGame broadcastMVar serverState = do
       if idx2 >= idx1
         then idx2 + 1
         else idx2
-    kickPlayer pid' players' =
-      case getPlayer pid' players' of
-        (Just player) -> do
-          WS.sendClose (wsConn player) $
-            T.pack "You took too long to make a move, goodbye!"
-          return $ removePlayer pid' players'
-        Nothing -> return players'
 
 handleServerEvent ::
-     (Int, Int, Int)
+     (Score, Score, Score)
+  -> Score
   -> MVar ([Player], PublicEvent)
   -> ServerState
   -> ServerEvent
   -> IO ServerState
-handleServerEvent scores broadcastMVar serverState event =
+handleServerEvent scores minScore broadcastMVar serverState event =
   case event of
     Join pid' wsConn' -> do
       let newPlayer = Player {pid = pid', wsConn = wsConn', score = 0}
@@ -295,20 +304,28 @@ handleServerEvent scores broadcastMVar serverState event =
       case maybeUpdatedGame of
         Just (Game pid1 (Just p1Move) pid2 (Just p2Move)) -> do
           let (p1Score, p2Score) = scoreGame scores p1Move p2Move
-              players' =
-                updatePlayerScore pid2 p2Score . updatePlayerScore pid1 p1Score $
-                players serverState
-              playerScores = getPlayerScores players'
+              (playersWithNewScores, p1Total) =
+                updatePlayerScore pid1 p1Score $ players serverState
+              (playersWithNewScores', p2Total) =
+                updatePlayerScore pid2 p2Score playersWithNewScores
+              playerScores = getPlayerScores playersWithNewScores'
               gameResultEvent = GameResult pid1 p1Move pid2 p2Move
-          -- Todo: Kick players whose scores fall too low
           putStrLn "Player Scores:"
           putStrLn "--------------"
           putStrLn $ formatPlayerScores playerScores
           putStrLn "--------------"
-          putMVar broadcastMVar (players', gameResultEvent)
+          putMVar broadcastMVar (playersWithNewScores', gameResultEvent)
+          playersAfterKick <-
+            if p1Total < minScore
+              then kickPlayerForScore pid1 playersWithNewScores'
+              else return playersWithNewScores'
+          playersAfterKick'' <-
+            if p2Total < minScore
+              then kickPlayerForScore pid2 playersAfterKick
+              else return playersAfterKick
           return $
             ServerState
-              { players = players'
+              { players = playersAfterKick''
               , eventHistory = gameResultEvent : eventHistory serverState
               , game = Nothing
               }
@@ -330,6 +347,7 @@ runServer = do
   scoreA <- require cfg "scoreA"
   scoreB <- require cfg "scoreB"
   scoreC <- require cfg "scoreC"
+  minScore <- require cfg "minScore"
   broadcastMVar <- newEmptyMVar
   let connectionStream = runWSServer wsPort
       moveStream = runHTTPServer httpPort
@@ -340,7 +358,7 @@ runServer = do
   putStrLn $ "HTTP server listening on port " <> show httpPort
   broadcast broadcastMVar
   S.foldlM'
-    (handleServerEvent (scoreA, scoreB, scoreC) broadcastMVar)
+    (handleServerEvent (scoreA, scoreB, scoreC) minScore broadcastMVar)
     initialServerState .
     S.mapM logServerEvent $
     serverEventStream
