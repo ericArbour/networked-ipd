@@ -342,9 +342,12 @@ handleServerEvent scores minScore broadcastMVar serverState event =
 startClients :: String -> Int -> Int -> [String] -> IO ()
 startClients host httpPort wsPort stratStrs =
   forM_ stratStrs $ \stratStr ->
-    forkIO $ do
+    forkIO $
+      -- Allow stderr to inherit to parent process so child errs are visible
+     do
       (_, Just hout, _, phandle) <-
         createProcess (startClient stratStr) {std_out = CreatePipe}
+      -- Drain and ignore child stdout
       S.drain $ FH.toBytes hout
       waitForProcess phandle
       return ()
