@@ -146,9 +146,7 @@ updatePlayerScore targetPid val ps =
   case getPlayer targetPid ps of
     Nothing -> (ps, 0)
     Just p ->
-      ( Player {pid = pid p, score = score p + val, wsConn = wsConn p} :
-        removePlayer (pid p) ps
-      , score p + val)
+      (p {score = score p + val} : removePlayer (pid p) ps, score p + val)
 
 getPlayerScores :: [Player] -> [(PlayerId, Score)]
 getPlayerScores = map playerToScore
@@ -269,11 +267,8 @@ handleServerEvent scores minScore broadcastMVar serverState event =
       WS.sendTextData wsConn' $ A.encode (IdAssignment pid', eventHistory')
       putMVar broadcastMVar (players', joinEvent)
       return $
-        ServerState
-          { players = players'
-          , eventHistory = joinEvent : eventHistory'
-          , game = game serverState
-          }
+        serverState
+          {players = players', eventHistory = joinEvent : eventHistory'}
     Quit pid' ->
       let players' = removePlayer pid' (players serverState)
           maybeGame = game serverState
@@ -285,12 +280,7 @@ handleServerEvent scores minScore broadcastMVar serverState event =
                 if pid' == pid1 || pid' == pid2
                   then Nothing
                   else maybeGame
-       in return $
-          ServerState
-            { players = players'
-            , eventHistory = eventHistory serverState
-            , game = game'
-            }
+       in return $ serverState {players = players', game = game'}
     StartNewGame -> handleStartNewGame broadcastMVar serverState
     GameMove pid move -> do
       let maybeGame = game serverState
@@ -331,13 +321,7 @@ handleServerEvent scores minScore broadcastMVar serverState event =
               , eventHistory = gameResultEvent : eventHistory serverState
               , game = Nothing
               }
-        _ ->
-          return $
-          ServerState
-            { players = players serverState
-            , eventHistory = eventHistory serverState
-            , game = maybeUpdatedGame
-            }
+        _ -> return $ serverState {game = maybeUpdatedGame}
 
 startClients :: String -> Int -> Int -> [String] -> IO ()
 startClients host httpPort wsPort stratStrs =

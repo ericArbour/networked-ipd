@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Client
   ( runClient
@@ -8,7 +8,6 @@ module Client
   , MoveAgainst(..)
   ) where
 
--- startup args :set args --host "127.0.0.1" --http-port 8081 --ws-port 8082 --strategy=Default
 import Control.Concurrent
 import Control.Exception (Exception, finally, throw)
 import Control.Monad (forever)
@@ -131,17 +130,32 @@ data Arg
   | StrategyArg String
   deriving (Eq, Show)
 
-data Config f = Config
-  { configHost :: f Host
-  , configHttpPort :: f HttpPort
-  , configWsPort :: f WsPort
-  , configStrategy :: f Strategy }
+data Config f =
+  Config
+    { configHost :: f Host
+    , configHttpPort :: f HttpPort
+    , configWsPort :: f WsPort
+    , configStrategy :: f Strategy
+    }
 
 configHoistMaybe :: Config Maybe -> Maybe (Config Identity)
-configHoistMaybe Config {..} = ( ( ( Config <$> (Identity <$> configHost) )
-                                            <*> (Identity <$> configHttpPort) )
-                                            <*> (Identity <$> configWsPort) )
-                                            <*> (Identity <$> configStrategy)
+configHoistMaybe Config {..} =
+  Config <$> (Identity <$> configHost) <*> (Identity <$> configHttpPort) <*>
+  (Identity <$> configWsPort) <*>
+  (Identity <$> configStrategy)
+
+parseArgs :: [Arg] -> Maybe (Config Identity)
+parseArgs = configHoistMaybe . foldl addArg emptyConfig
+  where
+    emptyConfig :: Config Maybe
+    emptyConfig = Config Nothing Nothing Nothing Nothing
+    addArg :: Config Maybe -> Arg -> Config Maybe
+    addArg cfg (HostArg hostStr) = cfg {configHost = readMaybe hostStr}
+    addArg cfg (HttpPortArg httpPortStr) =
+      cfg {configHttpPort = readMaybe httpPortStr}
+    addArg cfg (WsPortArg wsPortStr) = cfg {configWsPort = readMaybe wsPortStr}
+    addArg cfg (StrategyArg strategyStr) =
+      cfg {configStrategy = readMaybe strategyStr}
 
 options :: [OptDescr Arg]
 options =
@@ -211,19 +225,6 @@ processArgs = do
     header =
       "Usage: client-exe " <>
       "(--host <HOST> --port <PORT> --strategy <STRATEGY> | --help)"
-
-parseArgs :: [Arg] -> Maybe (Config Identity)
-parseArgs opts = configHoistMaybe $ foldl addArg emptyConfig opts
-  where
-    emptyConfig :: Config Maybe
-    emptyConfig = Config Nothing Nothing Nothing Nothing
-
-    addArg :: Config Maybe -> Arg -> Config Maybe
-    addArg cfg (HostArg hostStr)         = cfg { configHost     = readMaybe hostStr }
-    addArg cfg (HttpPortArg httpPortStr) = cfg { configHttpPort = readMaybe httpPortStr }
-    addArg cfg (WsPortArg wsPortStr)     = cfg { configWsPort   = readMaybe wsPortStr }
-    addArg cfg (StrategyArg strategyStr) = cfg { configStrategy = readMaybe strategyStr }
-
 
 -- Game
 -------------------------------------------------------------------------------
@@ -325,7 +326,8 @@ ostracize = maybe Cooperate opMove . find isDefect
 --------------------------------------------------------------------------------
 runClient :: IO ()
 runClient = do
-  Config (Identity host) (Identity wsPort) (Identity httpPort) (Identity strategy) <- processArgs
+  Config (Identity host) (Identity wsPort) (Identity httpPort) (Identity strategy) <-
+    processArgs
   maybeDecompStream <- S.uncons $ getWSStream host wsPort
   (initialData, streamTail) <-
     maybe (throw NoStreamFound) return maybeDecompStream
