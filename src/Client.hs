@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
 
 module Client
   ( runClient
@@ -13,6 +14,7 @@ import Control.Exception (Exception, finally, throw)
 import Control.Monad (forever)
 import Control.Monad.Trans (liftIO)
 import Data.ByteString.Lazy (ByteString)
+import Data.Functor.Identity
 import Data.List (dropWhile, find, intersperse)
 import Data.Maybe (listToMaybe, maybe)
 import Data.Proxy (Proxy(..))
@@ -129,6 +131,18 @@ data Arg
   | StrategyArg String
   deriving (Eq, Show)
 
+data Config f = Config
+  { configHost :: f Host
+  , configHttpPort :: f HttpPort
+  , configWsPort :: f WsPort
+  , configStrategy :: f Strategy }
+
+configHoistMaybe :: Config Maybe -> Maybe (Config Identity)
+configHoistMaybe Config {..} = ( ( ( Config <$> (Identity <$> configHost) )
+                                            <*> (Identity <$> configHttpPort) )
+                                            <*> (Identity <$> configWsPort) )
+                                            <*> (Identity <$> configStrategy)
+
 options :: [OptDescr Arg]
 options =
   [ Option [] ["help"] (NoArg Help) "Print this help message."
@@ -173,7 +187,7 @@ options =
        "always\ndefect against you, and otherwise I’ll always cooperate.")
   ]
 
-processArgs :: IO (Host, WsPort, HttpPort, Strategy)
+processArgs :: IO (Config Identity)
 processArgs = do
   args <- getArgs
   case getOpt Permute options args of
@@ -189,7 +203,7 @@ processArgs = do
               ("Please provide the required arguments.\n" <>
                usageInfo header options)
             exitWith (ExitFailure 1)
-          Just tup -> return tup
+          Just cfg -> return cfg
     (_, _, errs) -> do
       hPutStrLn stderr (concat errs <> usageInfo header options)
       exitWith (ExitFailure 1)
@@ -198,25 +212,18 @@ processArgs = do
       "Usage: client-exe " <>
       "(--host <HOST> --port <PORT> --strategy <STRATEGY> | --help)"
 
-parseArgs :: [Arg] -> Maybe (Host, WsPort, HttpPort, Strategy)
-parseArgs opts = do
-  HostArg hostStr <- find isHostArg opts
-  WsPortArg wsPortStr <- find isWsPortArg opts
-  wsPort <- readMaybe wsPortStr
-  HttpPortArg httpPortStr <- find isHttpPortArg opts
-  httpPort <- readMaybe httpPortStr
-  StrategyArg strategyStr <- find isStrategyArg opts
-  strategy <- readMaybe strategyStr
-  return (hostStr, wsPort, httpPort, strategy)
+parseArgs :: [Arg] -> Maybe (Config Identity)
+parseArgs opts = configHoistMaybe $ foldl addArg emptyConfig opts
   where
-    isHostArg (HostArg _) = True
-    isHostArg _ = False
-    isHttpPortArg (HttpPortArg _) = True
-    isHttpPortArg _ = False
-    isWsPortArg (WsPortArg _) = True
-    isWsPortArg _ = False
-    isStrategyArg (StrategyArg _) = True
-    isStrategyArg _ = False
+    emptyConfig :: Config Maybe
+    emptyConfig = Config Nothing Nothing Nothing Nothing
+
+    addArg :: Config Maybe -> Arg -> Config Maybe
+    addArg cfg (HostArg hostStr)         = cfg { configHost     = readMaybe hostStr }
+    addArg cfg (HttpPortArg httpPortStr) = cfg { configHttpPort = readMaybe httpPortStr }
+    addArg cfg (WsPortArg wsPortStr)     = cfg { configWsPort   = readMaybe wsPortStr }
+    addArg cfg (StrategyArg strategyStr) = cfg { configStrategy = readMaybe strategyStr }
+
 
 -- Game
 -------------------------------------------------------------------------------
@@ -277,6 +284,7 @@ getMove strategy myId opId moveMap =
         Cooperate -> return Cooperate
     Ostracize -> return $ reaction ostracize
   where
+    reaction :: ([MoveAgainst] -> Move) -> Move
     reaction f = maybe Cooperate f $ M.lookup opId moveMap
 
 randomDefect :: Int -> IO Move
@@ -317,7 +325,7 @@ ostracize = maybe Cooperate opMove . find isDefect
 --------------------------------------------------------------------------------
 runClient :: IO ()
 runClient = do
-  (host, wsPort, httpPort, strategy) <- processArgs
+  Config (Identity host) (Identity wsPort) (Identity httpPort) (Identity strategy) <- processArgs
   maybeDecompStream <- S.uncons $ getWSStream host wsPort
   (initialData, streamTail) <-
     maybe (throw NoStreamFound) return maybeDecompStream
