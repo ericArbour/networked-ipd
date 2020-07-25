@@ -2,9 +2,8 @@
 
 module Client
   ( runClient
-  , getMove
-  , Strategy(..)
-  , MoveMap
+  , titForTat
+  , titForTwoTats
   , MoveAgainst(..)
   ) where
 
@@ -271,12 +270,12 @@ getMove strategy myId opId moveMap =
     Random9010 -> randomDefect 10
     TitForTat -> return . reaction $ titForTat myId
     TitForTwoTats -> return . reaction $ titForTwoTats myId
-    Vigilante -> return . reaction $ maybe Cooperate opMove . listToMaybe
+    Vigilante -> return $ reaction vigilante
     ForgivingTitForTat ->
       case reaction (titForTat myId) of
         Defect -> randomDefect 2
         Cooperate -> return Cooperate
-    Ostracize -> return . reaction $ maybe Cooperate opMove . find isDefect
+    Ostracize -> return $ reaction ostracize
   where
     reaction f = maybe Cooperate f $ M.lookup opId moveMap
 
@@ -307,6 +306,12 @@ titForTwoTats myId opMas =
     [ma] -> Cooperate
     MoveAgainst _ Defect:mas -> titForTat myId mas
     _ -> Cooperate
+
+vigilante :: [MoveAgainst] -> Move
+vigilante = maybe Cooperate opMove . listToMaybe
+
+ostracize :: [MoveAgainst] -> Move
+ostracize = maybe Cooperate opMove . find isDefect
 
 -- Main
 --------------------------------------------------------------------------------

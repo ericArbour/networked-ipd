@@ -4,7 +4,6 @@ module Server
   ( runServer
   ) where
 
--- Todo: spin up clients at start up based on configuration
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Exception (finally)
@@ -343,10 +342,10 @@ handleServerEvent scores minScore broadcastMVar serverState event =
 startClients :: String -> Int -> Int -> [String] -> IO ()
 startClients host httpPort wsPort stratStrs =
   forM_ stratStrs $ \stratStr ->
-    forkIO $
+    forkIO $ do
+      (_, Just hout, _, phandle)
       -- Allow child stderr to inherit from parent process so child errs are visible
-     do
-      (_, Just hout, _, phandle) <-
+         <-
         createProcess (startClient stratStr) {std_out = CreatePipe}
       -- Drain and ignore child stdout
       S.drain $ FH.toBytes hout
