@@ -194,6 +194,24 @@ gameStartStream gameDuration = do
     putMVar startNewGameMVar StartNewGame
   S.repeatM . liftIO $ takeMVar startNewGameMVar
 
+makeNewGame :: [Player] -> IO (Maybe Game)
+makeNewGame players'
+  | playerCount < 2 = return Nothing
+  | otherwise = do
+    rn1 <- randomRIO (0, playerCount - 1)
+    rn2 <- randomRIO (0, playerCount - 2)
+    let idx1 = rn1
+        idx2 = getUniqueIdx rn1 rn2
+        p1 = players' !! idx1
+        p2 = players' !! idx2
+    return $ Just $ Game (pid p1) Nothing (pid p2) Nothing
+  where
+    playerCount = length players'
+    getUniqueIdx idx1 idx2 =
+      if idx2 >= idx1
+        then idx2 + 1
+        else idx2
+
 handleStartNewGame ::
      MVar ([Player], PublicEvent) -> ServerState -> IO ServerState
 handleStartNewGame broadcastMVar serverState = do
@@ -234,23 +252,55 @@ handleStartNewGame broadcastMVar serverState = do
         , eventHistory = eventHistory serverState
         , game = maybeNewGame
         }
+
+updateMaybeGame :: Move -> PlayerId -> Maybe Game -> Maybe Game
+updateMaybeGame _ _ Nothing = Nothing
+updateMaybeGame move pid jg@(Just (Game pid1 maybeP1Move pid2 maybeP2Move))
+  | pid == pid1 && isNothing maybeP1Move =
+    Just $ Game pid1 (Just move) pid2 maybeP2Move
+  | pid == pid2 && isNothing maybeP2Move =
+    Just $ Game pid1 maybeP1Move pid2 (Just move)
+  | otherwise = jg
+
+handleGameMove ::
+     MVar ([Player], PublicEvent)
+  -> ServerState
+  -> Config
+  -> PlayerId
+  -> Move
+  -> IO ServerState
+handleGameMove broadcastMVar serverState config pid move =
+  case maybeUpdatedGame of
+    Just (Game pid1 (Just p1Move) pid2 (Just p2Move)) -> do
+      let (p1Score, p2Score) = scoreGame (scores config) p1Move p2Move
+          (playersWithNewScores, p1Total) =
+            updatePlayerScore pid1 p1Score $ players serverState
+          (playersWithNewScores', p2Total) =
+            updatePlayerScore pid2 p2Score playersWithNewScores
+          playerScores = getPlayerScores playersWithNewScores'
+          gameResultEvent = GameResult pid1 p1Move pid2 p2Move
+      putStrLn "Player Scores:"
+      putStrLn "--------------"
+      putStrLn $ formatPlayerScores playerScores
+      putStrLn "--------------"
+      putMVar broadcastMVar (playersWithNewScores', gameResultEvent)
+      playersAfterKick <-
+        if p1Total < (minScore config)
+          then kickPlayerForScore pid1 playersWithNewScores'
+          else return playersWithNewScores'
+      playersAfterKick'' <-
+        if p2Total < (minScore config)
+          then kickPlayerForScore pid2 playersAfterKick
+          else return playersAfterKick
+      return $
+        ServerState
+          { players = playersAfterKick''
+          , eventHistory = gameResultEvent : eventHistory serverState
+          , game = Nothing
+          }
+    _ -> return $ serverState {game = maybeUpdatedGame}
   where
-    makeNewGame players' = do
-      let playerCount = length players'
-      if playerCount < 2
-        then return Nothing
-        else do
-          rn1 <- randomRIO (0, playerCount - 1)
-          rn2 <- randomRIO (0, playerCount - 2)
-          let idx1 = rn1
-              idx2 = getUniqueIdx rn1 rn2
-              p1 = players' !! idx1
-              p2 = players' !! idx2
-          return $ Just $ Game (pid p1) Nothing (pid p2) Nothing
-    getUniqueIdx idx1 idx2 =
-      if idx2 >= idx1
-        then idx2 + 1
-        else idx2
+    maybeUpdatedGame = updateMaybeGame move pid (game serverState)
 
 handleServerEvent ::
      Config
@@ -283,46 +333,8 @@ handleServerEvent config broadcastMVar serverState event =
                   else maybeGame
        in return $ serverState {players = players', game = game'}
     StartNewGame -> handleStartNewGame broadcastMVar serverState
-    GameMove pid move -> do
-      let maybeGame = game serverState
-          maybeUpdatedGame =
-            case maybeGame of
-              Nothing -> maybeGame
-              Just (Game pid1 maybeP1Move pid2 maybeP2Move)
-                | pid == pid1 && isNothing maybeP1Move ->
-                  Just $ Game pid1 (Just move) pid2 maybeP2Move
-                | pid == pid2 && isNothing maybeP2Move ->
-                  Just $ Game pid1 maybeP1Move pid2 (Just move)
-                | otherwise -> maybeGame
-      case maybeUpdatedGame of
-        Just (Game pid1 (Just p1Move) pid2 (Just p2Move)) -> do
-          let (p1Score, p2Score) = scoreGame (scores config) p1Move p2Move
-              (playersWithNewScores, p1Total) =
-                updatePlayerScore pid1 p1Score $ players serverState
-              (playersWithNewScores', p2Total) =
-                updatePlayerScore pid2 p2Score playersWithNewScores
-              playerScores = getPlayerScores playersWithNewScores'
-              gameResultEvent = GameResult pid1 p1Move pid2 p2Move
-          putStrLn "Player Scores:"
-          putStrLn "--------------"
-          putStrLn $ formatPlayerScores playerScores
-          putStrLn "--------------"
-          putMVar broadcastMVar (playersWithNewScores', gameResultEvent)
-          playersAfterKick <-
-            if p1Total < (minScore config)
-              then kickPlayerForScore pid1 playersWithNewScores'
-              else return playersWithNewScores'
-          playersAfterKick'' <-
-            if p2Total < (minScore config)
-              then kickPlayerForScore pid2 playersAfterKick
-              else return playersAfterKick
-          return $
-            ServerState
-              { players = playersAfterKick''
-              , eventHistory = gameResultEvent : eventHistory serverState
-              , game = Nothing
-              }
-        _ -> return $ serverState {game = maybeUpdatedGame}
+    GameMove pid move ->
+      handleGameMove broadcastMVar serverState config pid move
 
 -- Environment
 ---------------------------------------------------------------------------------------
