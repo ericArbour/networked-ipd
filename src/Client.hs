@@ -147,7 +147,7 @@ parseArgs = configHoistMaybe . foldl addArg emptyConfig
     emptyConfig :: Config Maybe
     emptyConfig = Config Nothing Nothing Nothing Nothing
     addArg :: Config Maybe -> Arg -> Config Maybe
-    addArg cfg (HostArg hostStr) = cfg {configHost = readMaybe hostStr}
+    addArg cfg (HostArg hostStr) = cfg {configHost = pure hostStr}
     addArg cfg (HttpPortArg httpPortStr) =
       cfg {configHttpPort = readMaybe httpPortStr}
     addArg cfg (WsPortArg wsPortStr) = cfg {configWsPort = readMaybe wsPortStr}
@@ -323,7 +323,7 @@ ostracize = maybe Cooperate opMove . find isDefect
 --------------------------------------------------------------------------------
 runClient :: IO ()
 runClient = do
-  Config (Identity host) (Identity wsPort) (Identity httpPort) (Identity strategy) <-
+  Config (Identity host) (Identity httpPort) (Identity wsPort) (Identity strategy) <-
     processArgs
   maybeDecompStream <- S.uncons $ getWSStream host wsPort
   (initialData, streamTail) <-
