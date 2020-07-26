@@ -3,7 +3,7 @@ module ClientSpec where
 import Data.Map.Strict (fromList)
 import Test.Hspec
 
-import Client (MoveAgainst(..), titForTat, titForTwoTats)
+import Client (MoveAgainst(..), ostracize, titForTat, titForTwoTats, vigilante)
 import Shared (Move(..))
 
 myId = 1
@@ -36,6 +36,12 @@ opDefectMeTwiceNotOther =
 
 opNeverRepeatsDefect =
   [MoveAgainst myId Defect, MoveAgainst myId Cooperate, MoveAgainst myId Defect]
+
+opOnlyCooperates =
+  [ MoveAgainst myId Cooperate
+  , MoveAgainst opId Cooperate
+  , MoveAgainst myId Cooperate
+  ]
 
 spec = do
   describe "titForTat" $ do
@@ -85,3 +91,23 @@ spec = do
       titForTwoTats myId opDefectMeTwiceOnly `shouldBe` Defect
     it "defects only if opponent defects twice in a row" $
       titForTwoTats myId opNeverRepeatsDefect `shouldBe` Cooperate
+  describe "vigilante" $ do
+    it "cooperates on opponent's first game" $
+      vigilante opFirstGame `shouldBe` Cooperate
+    it "cooperates when opponent last cooperated with acting player" $
+      vigilante opCooperateMeLast `shouldBe` Cooperate
+    it "defects when opponent last defected against acting player" $
+      vigilante opDefectMeLast `shouldBe` Defect
+    it "cooperates when opponent last cooperated with another player" $
+      vigilante opDefectMeNotOther `shouldBe` Cooperate
+    it "defects when opponent last defected against another player" $
+      vigilante opCooperateMeNotOther `shouldBe` Defect
+  describe "ostracize" $ do
+    it "cooperates on opponent's first game" $
+      ostracize opFirstGame `shouldBe` Cooperate
+    it "cooperates if opponent has only cooperated" $
+      ostracize opOnlyCooperates `shouldBe` Cooperate
+    it "defects if opponent has defected against acting player" $
+      ostracize opDefectMeNotOther `shouldBe` Defect
+    it "defects if opponent has defected against another player" $
+      ostracize opCooperateMeNotOther `shouldBe` Defect

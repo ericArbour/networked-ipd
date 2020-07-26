@@ -5,6 +5,8 @@ module Client
   ( runClient
   , titForTat
   , titForTwoTats
+  , vigilante
+  , ostracize
   , MoveAgainst(..)
   ) where
 
