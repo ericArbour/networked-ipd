@@ -30,6 +30,12 @@ instance FromJSON PlayerMove
 
 type Score = Int
 
+type Host = String
+
+type WsPort = Int
+
+type HttpPort = Int
+
 data Strategy
   = AlwaysDefect
   | AlwaysCooperate

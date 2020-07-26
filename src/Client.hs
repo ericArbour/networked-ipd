@@ -38,19 +38,16 @@ import qualified Streamly.Prelude as S
 
 import Shared
   ( API
+  , Host
+  , HttpPort
   , IdAssignment(..)
   , Move(..)
   , PlayerId
   , PlayerMove(..)
   , PublicEvent(..)
   , Strategy(..)
+  , WsPort
   )
-
-type Host = String
-
-type WsPort = Int
-
-type HttpPort = Int
 
 data MoveAgainst =
   MoveAgainst PlayerId Move

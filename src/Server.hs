@@ -10,7 +10,6 @@ import Control.Exception (finally)
 import Control.Monad (forM_, forever, when)
 import Control.Monad.Trans (liftIO)
 import Data.Configurator
-import Data.Configurator.Types (Config)
 import Data.List (find, intersperse)
 import Data.Maybe (isJust, isNothing)
 import Network.Wai.Handler.Warp (run)
@@ -28,6 +27,8 @@ import qualified Streamly.Prelude as S
 
 import Shared
   ( API
+  , Host
+  , HttpPort
   , IdAssignment(..)
   , Move(..)
   , PlayerId
@@ -35,6 +36,7 @@ import Shared
   , PublicEvent(..)
   , Score
   , Strategy(..)
+  , WsPort
   )
 
 -- Types
@@ -83,7 +85,7 @@ api = SV.Proxy
 app :: MVar PlayerMove -> SV.Application
 app moveMVar = SV.serve api (server moveMVar)
 
-runHTTPServer :: Int -> S.SerialT IO ServerEvent
+runHTTPServer :: HttpPort -> S.SerialT IO ServerEvent
 runHTTPServer port = do
   moveMVar <- liftIO newEmptyMVar
   liftIO . forkIO $ run port (app moveMVar)
@@ -113,7 +115,7 @@ application pidCounterTVar connectionMVar pending = do
         WS.receiveData conn :: IO T.Text
         return ()
 
-runWSServer :: String -> Int -> S.SerialT IO ServerEvent
+runWSServer :: Host -> WsPort -> S.SerialT IO ServerEvent
 runWSServer host port = do
   connectionMVar <- liftIO newEmptyMVar
   pidCounterTVar <- liftIO $ newTVarIO 0
@@ -251,13 +253,12 @@ handleStartNewGame broadcastMVar serverState = do
         else idx2
 
 handleServerEvent ::
-     (Score, Score, Score)
-  -> Score
+     Config
   -> MVar ([Player], PublicEvent)
   -> ServerState
   -> ServerEvent
   -> IO ServerState
-handleServerEvent scores minScore broadcastMVar serverState event =
+handleServerEvent config broadcastMVar serverState event =
   case event of
     Join pid' wsConn' -> do
       let newPlayer = Player {pid = pid', wsConn = wsConn', score = 0}
@@ -295,7 +296,7 @@ handleServerEvent scores minScore broadcastMVar serverState event =
                 | otherwise -> maybeGame
       case maybeUpdatedGame of
         Just (Game pid1 (Just p1Move) pid2 (Just p2Move)) -> do
-          let (p1Score, p2Score) = scoreGame scores p1Move p2Move
+          let (p1Score, p2Score) = scoreGame (scores config) p1Move p2Move
               (playersWithNewScores, p1Total) =
                 updatePlayerScore pid1 p1Score $ players serverState
               (playersWithNewScores', p2Total) =
@@ -308,11 +309,11 @@ handleServerEvent scores minScore broadcastMVar serverState event =
           putStrLn "--------------"
           putMVar broadcastMVar (playersWithNewScores', gameResultEvent)
           playersAfterKick <-
-            if p1Total < minScore
+            if p1Total < (minScore config)
               then kickPlayerForScore pid1 playersWithNewScores'
               else return playersWithNewScores'
           playersAfterKick'' <-
-            if p2Total < minScore
+            if p2Total < (minScore config)
               then kickPlayerForScore pid2 playersAfterKick
               else return playersAfterKick
           return $
@@ -323,9 +324,35 @@ handleServerEvent scores minScore broadcastMVar serverState event =
               }
         _ -> return $ serverState {game = maybeUpdatedGame}
 
-startClients :: String -> Int -> Int -> [String] -> IO ()
-startClients host httpPort wsPort stratStrs =
-  forM_ stratStrs $ \stratStr ->
+-- Environment
+---------------------------------------------------------------------------------------
+data Config =
+  Config
+    { httpPort :: HttpPort
+    , wsPort :: WsPort
+    , gameDuration :: Int
+    , scores :: (Score, Score, Score)
+    , minScore :: Score
+    , stratStrs :: [String]
+    , randomStratCount :: Int
+    }
+
+loadConfig :: IO Config
+loadConfig = do
+  cfgFile <- load [Required "server.cfg"]
+  Config <$> require cfgFile "httpPort" <*> require cfgFile "wsPort" <*>
+    require cfgFile "gameDuration" <*>
+    (listToTup <$> require cfgFile "scores") <*>
+    require cfgFile "minScore" <*>
+    require cfgFile "players" <*>
+    require cfgFile "randomPlayerCount"
+  where
+    listToTup [scoreA, scoreB, scoreC] = (scoreA, scoreB, scoreC)
+
+startClients :: Host -> Config -> IO ()
+startClients host config = do
+  randomStratStrs <- getRandomStratStrs (randomStratCount config)
+  forM_ (randomStratStrs ++ stratStrs config) $ \stratStr ->
     forkIO $ do
       (_, Just hout, _, phandle)
       -- Allow child stderr to inherit from parent process so child errs are visible
@@ -339,9 +366,9 @@ startClients host httpPort wsPort stratStrs =
     startClient stratStr =
       shell $
       "stack exec client-exe -- --host " <> host <> " --http-port " <>
-      show httpPort <>
+      show (httpPort config) <>
       " --ws-port " <>
-      show wsPort <>
+      show (wsPort config) <>
       " --strategy " <>
       stratStr
 
@@ -361,30 +388,18 @@ getRandomStratStrs n
 runServer :: IO ()
 runServer = do
   putStrLn "Starting server..."
-  cfg <- load [Required "server.cfg"]
-  httpPort <- require cfg "httpPort"
-  wsPort <- require cfg "wsPort"
-  gameDuration <- require cfg "gameDuration"
-  scoreA <- require cfg "scoreA"
-  scoreB <- require cfg "scoreB"
-  scoreC <- require cfg "scoreC"
-  minScore <- require cfg "minScore"
-  stratStrs <- require cfg "players"
-  randomStratCount <- require cfg "randomPlayerCount"
-  randomStratStrs <- getRandomStratStrs randomStratCount
-  let connectionStream = runWSServer host wsPort
-      moveStream = runHTTPServer httpPort
+  config <- loadConfig
+  let connectionStream = runWSServer host (wsPort config)
+      moveStream = runHTTPServer (httpPort config)
       serverEventStream =
         connectionStream `S.parallel` moveStream `S.parallel`
-        gameStartStream gameDuration
-  putStrLn $ "Websocket server listening on port " <> show wsPort
-  putStrLn $ "HTTP server listening on port " <> show httpPort
+        gameStartStream (gameDuration config)
+  putStrLn $ "Websocket server listening on port " <> show (wsPort config)
+  putStrLn $ "HTTP server listening on port " <> show (httpPort config)
   broadcastMVar <- newEmptyMVar
   broadcast broadcastMVar
-  startClients host httpPort wsPort (randomStratStrs ++ stratStrs)
-  S.foldlM'
-    (handleServerEvent (scoreA, scoreB, scoreC) minScore broadcastMVar)
-    initialServerState .
+  startClients host config
+  S.foldlM' (handleServerEvent config broadcastMVar) initialServerState .
     S.mapM logServerEvent $
     serverEventStream
   return ()
