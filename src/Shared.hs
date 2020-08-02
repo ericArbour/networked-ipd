@@ -47,7 +47,11 @@ data Strategy
   | Vigilante
   | ForgivingTitForTat
   | Ostracize
-  deriving (Eq, Read, Show, Enum, Bounded)
+  deriving (Eq, Read, Show, Enum, Bounded, Generic)
+
+instance ToJSON Strategy
+
+instance FromJSON Strategy
 
 data PublicEvent
   = PlayerJoin PlayerId

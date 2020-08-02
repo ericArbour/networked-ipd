@@ -45,7 +45,7 @@ instance Show WS.Connection where
   show = const "wsConn"
 
 data ServerEvent
-  = Join PlayerId WS.Connection
+  = Join PlayerId Strategy WS.Connection
   | Quit PlayerId
   | GameMove PlayerId Move
   | StartNewGame
@@ -54,6 +54,7 @@ data ServerEvent
 data Player =
   Player
     { pid :: PlayerId
+    , strategy :: Strategy
     , wsConn :: WS.Connection
     , score :: Score
     }
@@ -100,9 +101,13 @@ application :: TVar Int -> MVar ServerEvent -> WS.PendingConnection -> IO ()
 application pidCounterTVar connectionMVar pending = do
   conn <- WS.acceptRequest pending
   WS.withPingThread conn 30 (return ()) $ do
-    pid' <- atomically $ incrementCounter pidCounterTVar
-    putMVar connectionMVar $ Join pid' conn
-    flip finally (disconnect pid') $ keepConnAlive conn
+    initialBtstr <- WS.receiveData conn
+    case A.decode initialBtstr of
+      Just strategy' -> do
+        pid' <- atomically $ incrementCounter pidCounterTVar
+        putMVar connectionMVar $ Join pid' strategy' conn
+        flip finally (disconnect pid') $ keepConnAlive conn
+      _ -> WS.sendClose conn $ T.pack "Please provide a valid strategy."
   where
     incrementCounter pidCounterTVar = do
       nextPid <- readTVar pidCounterTVar >>= \prevId -> return (prevId + 1)
@@ -161,11 +166,15 @@ scoreGame (sA, sB, sC) Cooperate Defect = (sC, sA)
 scoreGame (sA, sB, sC) Cooperate Cooperate = (sB, sB)
 scoreGame (sA, sB, sC) Defect Defect = (sC, sC)
 
-formatPlayerScores :: [(PlayerId, Score)] -> String
-formatPlayerScores = foldr (<>) "" . intersperse "\n" . map playerScoreToString
+formatPlayerScores :: [Player] -> String
+formatPlayerScores = foldr (<>) "" . intersperse "\n" . map playerToString
   where
-    playerScoreToString (pid', score') =
-      "Player Id: " <> show pid' <> ", Score: " <> show score' <> "."
+    playerToString player =
+      "Player Id: " <> show (pid player) <> ", Strategy: " <>
+      show (strategy player) <>
+      ", Score: " <>
+      show (score player) <>
+      "."
 
 kickPlayer :: T.Text -> PlayerId -> [Player] -> IO [Player]
 kickPlayer message pid' players' =
@@ -277,11 +286,10 @@ handleGameMove broadcastMVar serverState config pid move =
             updatePlayerScore pid1 p1Score $ players serverState
           (playersWithNewScores', p2Total) =
             updatePlayerScore pid2 p2Score playersWithNewScores
-          playerScores = getPlayerScores playersWithNewScores'
           gameResultEvent = GameResult pid1 p1Move pid2 p2Move
       putStrLn "Player Scores:"
       putStrLn "--------------"
-      putStrLn $ formatPlayerScores playerScores
+      putStrLn $ formatPlayerScores playersWithNewScores'
       putStrLn "--------------"
       putMVar broadcastMVar (playersWithNewScores', gameResultEvent)
       playersAfterKick <-
@@ -310,8 +318,10 @@ handleServerEvent ::
   -> IO ServerState
 handleServerEvent config broadcastMVar serverState event =
   case event of
-    Join pid' wsConn' -> do
-      let newPlayer = Player {pid = pid', wsConn = wsConn', score = 0}
+    Join pid' strategy' wsConn' -> do
+      let newPlayer =
+            Player
+              {pid = pid', strategy = strategy', wsConn = wsConn', score = 0}
           players' = newPlayer : players serverState
           eventHistory' = eventHistory serverState
           joinEvent = PlayerJoin pid'

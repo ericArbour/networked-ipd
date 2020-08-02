@@ -97,9 +97,10 @@ postMoves host port myMovesMVar = do
 
 -- Websockets
 --------------------------------------------------------------------------------
-wsClient :: MVar ByteString -> WS.ClientApp ()
-wsClient btstrMVar conn = do
+wsClient :: MVar ByteString -> Strategy -> WS.ClientApp ()
+wsClient btstrMVar strategy conn = do
   putStrLn "Connected!"
+  WS.sendTextData conn . A.encode $ strategy
   flip finally disconnect $
     forever $ do
       btstr <- WS.receiveData conn
@@ -109,11 +110,11 @@ wsClient btstrMVar conn = do
       WS.sendClose conn ("Bye!" :: T.Text)
       exitSuccess
 
-getWSStream :: Host -> WsPort -> S.SerialT IO ByteString
-getWSStream host port = do
+getWSStream :: Host -> WsPort -> Strategy -> S.SerialT IO ByteString
+getWSStream host port strategy = do
   btstrMVar <- liftIO newEmptyMVar
   liftIO . forkIO . withSocketsDo $
-    WS.runClient host port "/" (wsClient btstrMVar)
+    WS.runClient host port "/" (wsClient btstrMVar strategy)
   S.repeatM . liftIO $ takeMVar btstrMVar
 
 decodeOrFail :: ByteString -> IO PublicEvent
@@ -327,7 +328,7 @@ runClient :: IO ()
 runClient = do
   Config (Identity host) (Identity httpPort) (Identity wsPort) (Identity strategy) <-
     processArgs
-  maybeDecompStream <- S.uncons $ getWSStream host wsPort
+  maybeDecompStream <- S.uncons $ getWSStream host wsPort strategy
   (initialData, streamTail) <-
     maybe (throw NoStreamFound) return maybeDecompStream
   (idAssignment, eventHistory) <-
