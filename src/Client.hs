@@ -7,6 +7,10 @@ module Client
   , titForTwoTats
   , vigilante
   , ostracize
+  , reaction
+  , fiftyFiftyOutcomes
+  , eightyTwentyOutcomes
+  , ninetyTenOutcomes
   , MoveAgainst(..)
   ) where
 
@@ -17,11 +21,13 @@ import Control.Monad.Trans (liftIO)
 import Data.ByteString.Lazy (ByteString)
 import Data.Functor.Identity
 import Data.List (dropWhile, find, intersperse)
+import Data.List.NonEmpty (NonEmpty(..), (!!))
 import Data.Maybe (listToMaybe, maybe)
 import Data.Proxy (Proxy(..))
 import Data.Typeable (Typeable)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.Socket (withSocketsDo)
+import Prelude hiding ((!!))
 import System.Console.GetOpt
 import System.Environment (getArgs)
 import System.Exit
@@ -273,28 +279,33 @@ getMove strategy myId opId moveMap =
   case strategy of
     AlwaysDefect -> return Defect
     AlwaysCooperate -> return Cooperate
-    Random5050 -> randomDefect 2
-    Random8020 -> randomDefect 5
-    Random9010 -> randomDefect 10
-    TitForTat -> return . reaction $ titForTat myId
-    TitForTwoTats -> return . reaction $ titForTwoTats myId
-    Vigilante -> return $ reaction vigilante
+    Random5050 -> (fiftyFiftyOutcomes !!) <$> getRandomIndex fiftyFiftyOutcomes
+    Random8020 ->
+      (eightyTwentyOutcomes !!) <$> getRandomIndex fiftyFiftyOutcomes
+    Random9010 -> (ninetyTenOutcomes !!) <$> getRandomIndex fiftyFiftyOutcomes
+    TitForTat -> return $ reaction moveMap opId (titForTat myId)
+    TitForTwoTats -> return $ reaction moveMap opId (titForTwoTats myId)
+    Vigilante -> return $ reaction moveMap opId vigilante
     ForgivingTitForTat ->
-      case reaction (titForTat myId) of
-        Defect -> randomDefect 2
+      case reaction moveMap opId (titForTat myId) of
+        Defect -> (fiftyFiftyOutcomes !!) <$> getRandomIndex fiftyFiftyOutcomes
         Cooperate -> return Cooperate
-    Ostracize -> return $ reaction ostracize
-  where
-    reaction :: ([MoveAgainst] -> Move) -> Move
-    reaction f = maybe Cooperate f $ M.lookup opId moveMap
+    Ostracize -> return $ reaction moveMap opId ostracize
 
-randomDefect :: Int -> IO Move
-randomDefect denom = do
-  rn <- randomRIO (1, denom)
-  return $
-    if rn == 1
-      then Defect
-      else Cooperate
+fiftyFiftyOutcomes :: NonEmpty Move
+fiftyFiftyOutcomes = Defect :| [Cooperate]
+
+eightyTwentyOutcomes :: NonEmpty Move
+eightyTwentyOutcomes = Defect :| replicate 4 Cooperate
+
+ninetyTenOutcomes :: NonEmpty Move
+ninetyTenOutcomes = Defect :| replicate 9 Cooperate
+
+getRandomIndex :: NonEmpty a -> IO Int
+getRandomIndex xs = randomRIO (0, length xs - 1)
+
+reaction :: MoveMap -> PlayerId -> ([MoveAgainst] -> Move) -> Move
+reaction moveMap opId f = maybe Cooperate f $ M.lookup opId moveMap
 
 isDefect :: MoveAgainst -> Bool
 isDefect (MoveAgainst _ Defect) = True
